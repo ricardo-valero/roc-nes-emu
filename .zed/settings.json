@@ -1,0 +1,20 @@
+{
+  "languages": {
+    "Nix": {
+      "language_servers": ["nil", "!nix-ls", "..."],
+      "format_on_save": {
+        "external": {
+          "command": "alejandra",
+          "arguments": []
+        }
+      }
+    }
+  },
+  "lsp": {
+    "nil": {
+      "binary": {
+        "path": "nil"
+      }
+    }
+  }
+}
