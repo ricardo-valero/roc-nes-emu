@@ -1,9 +1,9 @@
 platform "emulator"
-    requires {} { main : Effect Nat }
+    requires {} { main : Effect U64 }
     exposes []
     packages {}
     imports [Effect.{ Effect }]
     provides [mainForHost]
 
-mainForHost : Effect Nat as Fx
+mainForHost : Effect U64 as Fx
 mainForHost = main

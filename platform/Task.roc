@@ -29,11 +29,7 @@ forever = \task ->
     looper = \{} ->
         task
         |> InternalTask.toEffect
-        |> Effect.map
-            \res ->
-                when res is
-                    Ok _ -> Step {}
-                    Err e -> Done (Err e)
+        |> Effect.map (\res -> fromRes res (\_ -> Step {}) (\b -> Done (Err b)))
 
     Effect.loop {} looper
     |> InternalTask.fromEffect
@@ -46,11 +42,14 @@ loop = \state, step ->
         step current
         |> InternalTask.toEffect
         |> Effect.map
-            \res ->
-                when res is
-                    Ok (Step newState) -> Step newState
-                    Ok (Done newResult) -> Done (Ok newResult)
-                    Err e -> Done (Err e)
+            \res -> fromRes
+                    res
+                    (\a ->
+                        when a is
+                            Step newState -> Step newState
+                            Done newResult -> Done (Ok newResult)
+                    )
+                    (\b -> Done (Err b))
 
     Effect.loop state looper
     |> InternalTask.fromEffect
@@ -102,14 +101,10 @@ err = \a -> InternalTask.err a
 ##
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \task, transform ->
-    effect = Effect.after
+    Effect.after
         (InternalTask.toEffect task)
-        \res ->
-            when res is
-                Ok a -> transform (Ok a) |> InternalTask.toEffect
-                Err b -> transform (Err b) |> InternalTask.toEffect
-
-    InternalTask.fromEffect effect
+        \res -> fromRes res (\a -> transform (Ok a)) (\b -> transform (Err b)) |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
 ## Take the success value from a given [Task] and use that to generate a new [Task].
 ##
@@ -124,14 +119,10 @@ attempt = \task, transform ->
 ## ```
 await : Task a b, (a -> Task c b) -> Task c b
 await = \task, transform ->
-    effect = Effect.after
+    Effect.after
         (InternalTask.toEffect task)
-        \res ->
-            when res is
-                Ok a -> transform a |> InternalTask.toEffect
-                Err b -> err b |> InternalTask.toEffect
-
-    InternalTask.fromEffect effect
+        \res -> fromRes res transform err |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
 ## Take the error value from a given [Task] and use that to generate a new [Task].
 ##
@@ -142,14 +133,10 @@ await = \task, transform ->
 ## ```
 onErr : Task a b, (b -> Task a c) -> Task a c
 onErr = \task, transform ->
-    effect = Effect.after
+    Effect.after
         (InternalTask.toEffect task)
-        \res ->
-            when res is
-                Ok a -> ok a |> InternalTask.toEffect
-                Err b -> transform b |> InternalTask.toEffect
-
-    InternalTask.fromEffect effect
+        \res -> fromRes res ok transform |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
 ## Transform the success value of a given [Task] with a given function.
 ##
@@ -160,14 +147,10 @@ onErr = \task, transform ->
 ## ```
 map : Task a c, (a -> b) -> Task b c
 map = \task, transform ->
-    effect = Effect.after
+    Effect.after
         (InternalTask.toEffect task)
-        \res ->
-            when res is
-                Ok a -> ok (transform a) |> InternalTask.toEffect
-                Err b -> err b |> InternalTask.toEffect
-
-    InternalTask.fromEffect effect
+        \res -> fromRes res (\a -> ok (transform a)) err |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
 ## Transform the error value of a given [Task] with a given function.
 ##
@@ -178,21 +161,14 @@ map = \task, transform ->
 ## ```
 mapErr : Task c a, (a -> b) -> Task c b
 mapErr = \task, transform ->
-    effect = Effect.after
+    Effect.after
         (InternalTask.toEffect task)
-        \res ->
-            when res is
-                Ok c -> ok c |> InternalTask.toEffect
-                Err a -> err (transform a) |> InternalTask.toEffect
-
-    InternalTask.fromEffect effect
+        \res -> res |> fromRes ok (\b -> err (transform b)) |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
 ## Use a Result among other Tasks by converting it into a [Task].
 fromResult : Result a b -> Task a b
-fromResult = \res ->
-    when res is
-        Ok a -> ok a
-        Err b -> err b
+fromResult = fromRes2 ok err
 
 ## Apply a task to another task applicatively. This can be used with
 ## [ok] to build a [Task] that returns a record.
@@ -211,7 +187,6 @@ fromResult = \res ->
 batch : Task a c -> (Task (a -> b) c -> Task b c)
 batch = \current -> \next ->
         f = next!
-
         map current f
 
 ## Apply each task in a list sequentially, and return a [Task] with the list of the resulting values.
@@ -229,7 +204,6 @@ sequence : List (Task ok err) -> Task (List ok) err
 sequence = \tasks ->
     List.walk tasks (InternalTask.ok []) \state, task ->
         value = task!
-
         state |> map \values -> List.append values value
 
 ## Apply a function that returns `Task {} _` for each item in a list.
@@ -267,9 +241,19 @@ forEach = \items, fn ->
 ##
 result : Task ok err -> Task (Result ok err) *
 result = \task ->
-    effect =
-        Effect.after
-            (InternalTask.toEffect task)
-            \res -> res |> ok |> InternalTask.toEffect
+    Effect.after
+        (InternalTask.toEffect task)
+        \res -> res |> ok |> InternalTask.toEffect
+    |> InternalTask.fromEffect
 
-    InternalTask.fromEffect effect
+fromRes : Result a b, (a -> c), (b -> c) -> c
+fromRes = \res, fa, fb ->
+    when res is
+        Ok a -> fa a
+        Err b -> fb b
+
+fromRes2 : (a -> c), (b -> c) -> (Result a b -> c)
+fromRes2 = \fa, fb -> \res ->
+        when res is
+            Ok a -> fa a
+            Err b -> fb b

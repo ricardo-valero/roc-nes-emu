@@ -5,20 +5,6 @@ const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
-comptime {
-    // This is a workaround for https://github.com/ziglang/zig/issues/8218
-    // which is only necessary on macOS.
-    //
-    // Once that issue is fixed, we can undo the changes in
-    // 177cf12e0555147faa4d436e52fc15175c2c4ff0 and go back to passing
-    // -fcompiler-rt in link.rs instead of doing this. Note that this
-    // workaround is present in many host.zig files, so make sure to undo
-    // it everywhere!
-    if (builtin.os.tag == .macos) {
-        _ = @import("compiler_rt");
-    }
-}
-
 const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) anyopaque;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*anyopaque;
@@ -36,13 +22,13 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
     _ = old_size;
     _ = alignment;
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as(@alignOf(Align), @alignCast(@as([*]u8, @ptrCast(c_ptr)))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@as(@alignOf(Align), @alignCast(@as([*]u8, @ptrCast(c_ptr)))));
 }
 
 export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
@@ -64,8 +50,8 @@ fn call_the_closure(closure_data_pointer: [*]u8) usize {
     const allocator = std.heap.page_allocator;
 
     const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
-    var output = @ptrCast([*]usize, raw_output);
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @as(usize, @intCast(size)), .at_least) catch unreachable;
+    const output = @as([*]usize, @ptrCast(raw_output));
 
     defer {
         allocator.free(raw_output);
@@ -82,9 +68,9 @@ extern fn set_output_count(cnt: usize) void;
 
 pub fn main() u8 {
     // Setup roc closure calling.
-    const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = roc_alloc(@intCast(usize, size), @alignOf(u64)).?;
-    var output = @ptrCast([*]u8, raw_output);
+    const size = @as(usize, @intCast(roc__mainForHost_size()));
+    const raw_output = roc_alloc(@as(usize, @intCast(size)), @alignOf(u64)).?;
+    const output = @as([*]u8, @ptrCast(raw_output));
 
     defer {
         roc_dealloc(raw_output, @alignOf(u64));
@@ -92,7 +78,7 @@ pub fn main() u8 {
 
     // Call roc function.
     roc__mainForHost_1_exposed_generic(output);
-    const closure_data_pointer = @ptrCast([*]u8, output);
+    const closure_data_pointer = @as([*]u8, @ptrCast(output));
     const cnt = call_the_closure(closure_data_pointer);
 
     set_output_count(cnt);
