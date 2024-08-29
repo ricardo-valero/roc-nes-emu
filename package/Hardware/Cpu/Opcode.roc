@@ -9,136 +9,207 @@ module []
 ## - Similar to zpx, but the Y register is used instead of X. Example: LDA $10,Y (Load the accumulator with the value at memory location $10 + Y).
 ## Indirect (IND, IZX, IZY): The operand's address is stored at a specified memory location. This is typically used for jump instructions. Example: JMP ($1000) (Jump to the address stored at memory location $1000).
 ## - The operand's address is calculated by first adding the X register to a zero-page address, then using the value at this address as a pointer to the final memory location. Example: LDA ($10,X).
-## - The operand's address is determined by first looking up a zero-page address, then adding the Y register to this address to get the final memory location. Example: LDA ($10),Y.
+## TODO: THIS IS DIFFERENT - The operand's address is determined by first looking up a zero-page address, then adding the Y register to this address to get the final memory location. Example: LDA ($10),Y.
 ## Absolute (ABS, ABX, ABY): The operand is a 16-bit memory address provided directly in the instruction. Example: LDA $1234 (Load the accumulator with the value at memory location $1234).
 ## - The operand's address is calculated by adding the X register to a 16-bit base address. Example: LDA $1000,X (Load the accumulator with the value at memory location $1000 + X).
 ## - Similar to abx, but the Y register is used instead of X. Example: LDA $1000,Y (Load the accumulator with the value at memory location $1000 + Y).
 ## Relative (REL): The operand is a signed 8-bit offset used for branch instructions, which is added to the program counter (PC) to determine the jump target. Example: BEQ $10 (Branch if equal to the location PC + $10).
-Addressing : [Implied, Immediate, ZeroPage [Base, X, Y], Absolute [Base, X, Y], Indirect [Base, X, Y], Relative]
 
-# lookup : U8 -> Lookup U8
+AddressingMode : [Implied, Immediate, ZeroPage [Base, X, Y], Absolute [Base, X, Y], Indirect [Base, X, Y], Relative]
+
+Lookup cycle : [
+    # Logical and arithmetic
+    ORA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    AND [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    EOR [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    ADC [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    SBC [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    CMP [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    LDA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    # Move
+    ASL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    DEC [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
+    INC [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
+    LDY [Absolute, AbsoluteX, Immediate, ZeroPage, ZeroPageX] cycle,
+    LSR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    ROL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    ROR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    LDX [Absolute, AbsoluteY, Immediate, ZeroPage, ZeroPageY] cycle,
+    # Jump
+    #
+    # Flag (branch on condition)
+    # Flag (set or clear)
+    #
+    # Other
+    BCC [Relative] cycle,
+    BCS [Relative] cycle,
+    BEQ [Relative] cycle,
+    BIT [Absolute, ZeroPage] cycle,
+    BMI [Relative] cycle,
+    BNE [Relative] cycle,
+    BPL [Relative] cycle,
+    BRK [Immediate] cycle,
+    BVC [Relative] cycle,
+    BVS [Relative] cycle,
+    CLC [Implied] cycle,
+    CLD [Implied] cycle,
+    CLI [Implied] cycle,
+    CLV [Implied] cycle,
+    CPX [Absolute, Immediate, ZeroPage] cycle,
+    CPY [Absolute, Immediate, ZeroPage] cycle,
+    DEX [Implied] cycle,
+    DEY [Implied] cycle,
+    INX [Implied] cycle,
+    INY [Implied] cycle,
+    JMP [Absolute, Indirect] cycle,
+    JSR [Absolute] cycle,
+    NOP [Implied] cycle,
+    PHA [Implied] cycle,
+    PHP [Implied] cycle,
+    PLA [Implied] cycle,
+    PLP [Implied] cycle,
+    RTI [Implied] cycle,
+    RTS [Implied] cycle,
+    SEC [Implied] cycle,
+    SED [Implied] cycle,
+    SEI [Implied] cycle,
+    STA [Absolute, AbsoluteX, AbsoluteY, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    STX [Absolute, ZeroPage, ZeroPageY] cycle,
+    STY [Absolute, ZeroPage, ZeroPageX] cycle,
+    TAX [Implied] cycle,
+    TAY [Implied] cycle,
+    TSX [Implied] cycle,
+    TXA [Implied] cycle,
+    TXS [Implied] cycle,
+    TYA [Implied] cycle,
+    # Nop
+    # Illegal
+    Illegal [Implied] cycle,
+    Unknown,
+]
+
+lookup : U8 -> Lookup U8
 lookup = \byte ->
     when byte is
         # Logical and arithmetic
-        0x01 -> ORA (Indirect X) 6
-        0x05 -> ORA (ZeroPage Base) 3
+        0x01 -> ORA XIndirect 6
+        0x05 -> ORA ZeroPage 3
         0x09 -> ORA Immediate 2
-        0x0D -> ORA (Absolute Base) 4
-        0x11 -> ORA (Indirect Y) 5
-        0x15 -> ORA (ZeroPage X) 4
-        0x19 -> ORA (Absolute Y) 4
-        0x1D -> ORA (Absolute X) 4
-        0x21 -> AND (Indirect X) 6
-        0x25 -> AND (ZeroPage Base) 3
+        0x0D -> ORA Absolute 4
+        0x11 -> ORA IndirectY 5
+        0x15 -> ORA ZeroPageX 4
+        0x19 -> ORA AbsoluteY 4
+        0x1D -> ORA AbsoluteX 4
+        0x21 -> AND XIndirect 6
+        0x25 -> AND ZeroPage 3
         0x29 -> AND Immediate 2
-        0x2D -> AND (Absolute Base) 4
-        0x31 -> AND (Indirect Y) 5
-        0x35 -> AND (ZeroPage X) 4
-        0x39 -> AND (Absolute Y) 4
-        0x3D -> AND (Absolute X) 4
-        0x41 -> EOR (Indirect X) 6
-        0x45 -> EOR (ZeroPage Base) 3
+        0x2D -> AND Absolute 4
+        0x31 -> AND IndirectY 5
+        0x35 -> AND ZeroPageX 4
+        0x39 -> AND AbsoluteY 4
+        0x3D -> AND AbsoluteX 4
+        0x41 -> EOR XIndirect 6
+        0x45 -> EOR ZeroPage 3
         0x49 -> EOR Immediate 2
-        0x4D -> EOR (Absolute Base) 4
-        0x51 -> EOR (Indirect Y) 5
-        0x55 -> EOR (ZeroPage X) 4
-        0x59 -> EOR (Absolute Y) 4
-        0x5D -> EOR (Absolute X) 4
-        0x61 -> ADC (Indirect X) 6
-        0x65 -> ADC (ZeroPage Base) 3
+        0x4D -> EOR Absolute 4
+        0x51 -> EOR IndirectY 5
+        0x55 -> EOR ZeroPageX 4
+        0x59 -> EOR AbsoluteY 4
+        0x5D -> EOR AbsoluteX 4
+        0x61 -> ADC XIndirect 6
+        0x65 -> ADC ZeroPage 3
         0x69 -> ADC Immediate 2
-        0x6D -> ADC (Absolute Base) 4
-        0x71 -> ADC (Indirect Y) 5
-        0x75 -> ADC (ZeroPage X) 4
-        0x79 -> ADC (Absolute Y) 4
-        0x7D -> ADC (Absolute X) 4
-        0xE1 -> SBC (Indirect X) 6
-        0xE5 -> SBC (ZeroPage Base) 3
+        0x6D -> ADC Absolute 4
+        0x71 -> ADC IndirectY 5
+        0x75 -> ADC ZeroPageX 4
+        0x79 -> ADC AbsoluteY 4
+        0x7D -> ADC AbsoluteX 4
+        0xE1 -> SBC XIndirect 6
+        0xE5 -> SBC ZeroPage 3
         0xE9 -> SBC Immediate 2
-        0xEB -> SBC Implied 2
-        0xED -> SBC (Absolute Base) 4
-        0xF1 -> SBC (Indirect Y) 5
-        0xF5 -> SBC (ZeroPage X) 4
-        0xF9 -> SBC (Absolute Y) 4
-        0xFD -> SBC (Absolute X) 4
-        0xC1 -> CMP (Indirect X) 6
-        0xC5 -> CMP (ZeroPage Base) 3
+        0xED -> SBC Absolute 4
+        0xF1 -> SBC IndirectY 5
+        0xF5 -> SBC ZeroPageX 4
+        0xF9 -> SBC AbsoluteY 4
+        0xFD -> SBC AbsoluteX 4
+        0xC1 -> CMP XIndirect 6
+        0xC5 -> CMP ZeroPage 3
         0xC9 -> CMP Immediate 2
-        0xCD -> CMP (Absolute Base) 4
-        0xD1 -> CMP (Indirect Y) 5
-        0xD5 -> CMP (ZeroPage X) 4
-        0xD9 -> CMP (Absolute Y) 4
-        0xDD -> CMP (Absolute X) 4
+        0xCD -> CMP Absolute 4
+        0xD1 -> CMP IndirectY 5
+        0xD5 -> CMP ZeroPageX 4
+        0xD9 -> CMP AbsoluteY 4
+        0xDD -> CMP AbsoluteX 4
         0xE0 -> CPX Immediate 2
-        0xE4 -> CPX (ZeroPage Base) 3
-        0xEC -> CPX (Absolute Base) 4
+        0xE4 -> CPX ZeroPage 3
+        0xEC -> CPX Absolute 4
         0xC0 -> CPY Immediate 2
-        0xC4 -> CPY (ZeroPage Base) 3
-        0xCC -> CPY (Absolute Base) 4
-        0xC6 -> DEC (ZeroPage Base) 5
-        0xCE -> DEC (Absolute Base) 6
-        0xD6 -> DEC (ZeroPage X) 6
-        0xDE -> DEC (Absolute X) 7
+        0xC4 -> CPY ZeroPage 3
+        0xCC -> CPY Absolute 4
+        0xC6 -> DEC ZeroPage 5
+        0xCE -> DEC Absolute 6
+        0xD6 -> DEC ZeroPageX 6
+        0xDE -> DEC AbsoluteX 7
         0xCA -> DEX Implied 2
         0x88 -> DEY Implied 2
-        0xE6 -> INC (ZeroPage Base) 5
-        0xEE -> INC (Absolute Base) 6
-        0xF6 -> INC (ZeroPage X) 6
-        0xFE -> INC (Absolute X) 7
+        0xE6 -> INC ZeroPage 5
+        0xEE -> INC Absolute 6
+        0xF6 -> INC ZeroPageX 6
+        0xFE -> INC AbsoluteX 7
         0xE8 -> INX Implied 2
         0xC8 -> INY Implied 2
-        0x06 -> ASL (ZeroPage Base) 5
+        0x06 -> ASL ZeroPage 5
         0x0A -> ASL Implied 2
-        0x0E -> ASL (Absolute Base) 6
-        0x16 -> ASL (ZeroPage X) 6
-        0x1E -> ASL (Absolute X) 7
-        0x46 -> LSR (ZeroPage Base) 5
+        0x0E -> ASL Absolute 6
+        0x16 -> ASL ZeroPageX 6
+        0x1E -> ASL AbsoluteX 7
+        0x46 -> LSR ZeroPage 5
         0x4A -> LSR Implied 2
-        0x4E -> LSR (Absolute Base) 6
-        0x56 -> LSR (ZeroPage X) 6
-        0x5E -> LSR (Absolute X) 7
-        0x26 -> ROL (ZeroPage Base) 5
+        0x4E -> LSR Absolute 6
+        0x56 -> LSR ZeroPageX 6
+        0x5E -> LSR AbsoluteX 7
+        0x26 -> ROL ZeroPage 5
         0x2A -> ROL Implied 2
-        0x2E -> ROL (Absolute Base) 6
-        0x36 -> ROL (ZeroPage X) 6
-        0x3E -> ROL (Absolute X) 7
-        0x66 -> ROR (ZeroPage Base) 5
+        0x2E -> ROL Absolute 6
+        0x36 -> ROL ZeroPageX 6
+        0x3E -> ROL AbsoluteX 7
+        0x66 -> ROR ZeroPage 5
         0x6A -> ROR Implied 2
-        0x6E -> ROR (Absolute Base) 6
-        0x76 -> ROR (ZeroPage X) 6
-        0x7E -> ROR (Absolute X) 7
+        0x6E -> ROR Absolute 6
+        0x76 -> ROR ZeroPageX 6
+        0x7E -> ROR AbsoluteX 7
         # Move
-        0xA1 -> LDA (Indirect X) 6
-        0xA5 -> LDA (ZeroPage Base) 3
+        0xA1 -> LDA XIndirect 6
+        0xA5 -> LDA ZeroPage 3
         0xA9 -> LDA Immediate 2
-        0xAD -> LDA (Absolute Base) 4
-        0xB1 -> LDA (Indirect Y) 5
-        0xB5 -> LDA (ZeroPage X) 4
-        0xB9 -> LDA (Absolute Y) 4
-        0xBD -> LDA (Absolute X) 4
+        0xAD -> LDA Absolute 4
+        0xB1 -> LDA IndirectY 5
+        0xB5 -> LDA ZeroPageX 4
+        0xB9 -> LDA AbsoluteY 4
+        0xBD -> LDA AbsoluteX 4
         0xA2 -> LDX Immediate 2
-        0xA6 -> LDX (ZeroPage Base) 3
-        0xAE -> LDX (Absolute Base) 4
-        0xB6 -> LDX (ZeroPage Y) 4
-        0xBE -> LDX (Absolute Y) 4
+        0xA6 -> LDX ZeroPage 3
+        0xAE -> LDX Absolute 4
+        0xB6 -> LDX ZeroPageY 4
+        0xBE -> LDX AbsoluteY 4
         0xA0 -> LDY Immediate 2
-        0xA4 -> LDY (ZeroPage Base) 3
-        0xAC -> LDY (Absolute Base) 4
-        0xB4 -> LDY (ZeroPage X) 4
-        0xBC -> LDY (Absolute X) 4
-        0x81 -> STA (Indirect X) 6
-        0x85 -> STA (ZeroPage Base) 3
-        0x8D -> STA (Absolute Base) 4
-        0x91 -> STA (Indirect Y) 6
-        0x95 -> STA (ZeroPage X) 4
-        0x99 -> STA (Absolute Y) 5
-        0x9D -> STA (Absolute X) 5
-        0x86 -> STX (ZeroPage Base) 3
-        0x8E -> STX (Absolute Base) 4
-        0x96 -> STX (ZeroPage Y) 4
-        0x84 -> STY (ZeroPage Base) 3
-        0x8C -> STY (Absolute Base) 4
-        0x94 -> STY (ZeroPage X) 4
+        0xA4 -> LDY ZeroPage 3
+        0xAC -> LDY Absolute 4
+        0xB4 -> LDY ZeroPageX 4
+        0xBC -> LDY AbsoluteX 4
+        0x81 -> STA XIndirect 6
+        0x85 -> STA ZeroPage 3
+        0x8D -> STA Absolute 4
+        0x91 -> STA IndirectY 6
+        0x95 -> STA ZeroPageX 4
+        0x99 -> STA AbsoluteY 5
+        0x9D -> STA AbsoluteX 5
+        0x86 -> STX ZeroPage 3
+        0x8E -> STX Absolute 4
+        0x96 -> STX ZeroPageY 4
+        0x84 -> STY ZeroPage 3
+        0x8C -> STY Absolute 4
+        0x94 -> STY ZeroPageX 4
         0x8A -> TXA Implied 2
         0xAA -> TAX Implied 2
         0x98 -> TYA Implied 2
@@ -150,9 +221,9 @@ lookup = \byte ->
         0x28 -> PLP Implied 4
         0x08 -> PHP Implied 3
         # Jump
-        0x4C -> JMP (Absolute Base) 3
-        0x6C -> JMP (Indirect Base) 5
-        0x20 -> JSR (Absolute Base) 6
+        0x4C -> JMP Absolute 3
+        0x6C -> JMP Indirect 5
+        0x20 -> JSR Absolute 6
         # Flag (branch on condition)
         0x10 -> BPL Relative 2
         0x30 -> BMI Relative 2
@@ -174,8 +245,8 @@ lookup = \byte ->
         0x00 -> BRK Immediate 7
         0x40 -> RTI Implied 6
         0x60 -> RTS Implied 6
-        0x24 -> BIT (ZeroPage Base) 3
-        0x2C -> BIT (Absolute Base) 4
+        0x24 -> BIT ZeroPage 3
+        0x2C -> BIT Absolute 4
         # Nop
         0x14 -> NOP Implied 4
         0x1A -> NOP Implied 2
