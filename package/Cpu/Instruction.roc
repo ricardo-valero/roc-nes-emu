@@ -1,5 +1,5 @@
 # 6502
-module []
+module [lookup]
 
 ## Addressing modes
 ## Implied (IMP): The operand is implied by the instruction itself. No additional data is needed. Example: CLC (Clear Carry Flag).
@@ -17,19 +17,27 @@ module []
 
 AddressingMode : [Implied, Immediate, ZeroPage [Base, X, Y], Absolute [Base, X, Y], Indirect [Base, X, Y], Relative]
 
-Lookup cycle : [
-    # Logical and arithmetic
-    ORA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    AND [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    EOR [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    ADC [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    SBC [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    CMP [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    LDA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+Instruction cycle : [
+    # Logical
+    Or [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    And [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    Xor [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    # Arithmetic
+    Adc [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    Sbc [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    Compare [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
+    CompareX [Absolute, Immediate, ZeroPage] cycle,
+    CompareY [Absolute, Immediate, ZeroPage] cycle,
+    # Increment and decrement
+    Decrement [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
+    DecrementX [Implied] cycle,
+    DecrementY [Implied] cycle,
+    Increment [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
+    IncrementX [Implied] cycle,
+    IncrementY [Implied] cycle,
     # Move
+    LDA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     ASL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
-    DEC [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
-    INC [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
     LDY [Absolute, AbsoluteX, Immediate, ZeroPage, ZeroPageX] cycle,
     LSR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
     ROL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
@@ -55,15 +63,8 @@ Lookup cycle : [
     CLD [Implied] cycle,
     CLI [Implied] cycle,
     CLV [Implied] cycle,
-    CPX [Absolute, Immediate, ZeroPage] cycle,
-    CPY [Absolute, Immediate, ZeroPage] cycle,
-    DEX [Implied] cycle,
-    DEY [Implied] cycle,
-    INX [Implied] cycle,
-    INY [Implied] cycle,
     JMP [Absolute, Indirect] cycle,
     JSR [Absolute] cycle,
-    NOP [Implied] cycle,
     PHA [Implied] cycle,
     PHP [Implied] cycle,
     PLA [Implied] cycle,
@@ -83,81 +84,82 @@ Lookup cycle : [
     TXS [Implied] cycle,
     TYA [Implied] cycle,
     # Nop
+    Nop [Implied] cycle,
     # Illegal
     Illegal [Implied] cycle,
     Unknown,
 ]
 
-lookup : U8 -> Lookup U8
+lookup : U8 -> Instruction U8
 lookup = \byte ->
     when byte is
         # Logical and arithmetic
-        0x01 -> ORA XIndirect 6
-        0x05 -> ORA ZeroPage 3
-        0x09 -> ORA Immediate 2
-        0x0D -> ORA Absolute 4
-        0x11 -> ORA IndirectY 5
-        0x15 -> ORA ZeroPageX 4
-        0x19 -> ORA AbsoluteY 4
-        0x1D -> ORA AbsoluteX 4
-        0x21 -> AND XIndirect 6
-        0x25 -> AND ZeroPage 3
-        0x29 -> AND Immediate 2
-        0x2D -> AND Absolute 4
-        0x31 -> AND IndirectY 5
-        0x35 -> AND ZeroPageX 4
-        0x39 -> AND AbsoluteY 4
-        0x3D -> AND AbsoluteX 4
-        0x41 -> EOR XIndirect 6
-        0x45 -> EOR ZeroPage 3
-        0x49 -> EOR Immediate 2
-        0x4D -> EOR Absolute 4
-        0x51 -> EOR IndirectY 5
-        0x55 -> EOR ZeroPageX 4
-        0x59 -> EOR AbsoluteY 4
-        0x5D -> EOR AbsoluteX 4
-        0x61 -> ADC XIndirect 6
-        0x65 -> ADC ZeroPage 3
-        0x69 -> ADC Immediate 2
-        0x6D -> ADC Absolute 4
-        0x71 -> ADC IndirectY 5
-        0x75 -> ADC ZeroPageX 4
-        0x79 -> ADC AbsoluteY 4
-        0x7D -> ADC AbsoluteX 4
-        0xE1 -> SBC XIndirect 6
-        0xE5 -> SBC ZeroPage 3
-        0xE9 -> SBC Immediate 2
-        0xED -> SBC Absolute 4
-        0xF1 -> SBC IndirectY 5
-        0xF5 -> SBC ZeroPageX 4
-        0xF9 -> SBC AbsoluteY 4
-        0xFD -> SBC AbsoluteX 4
-        0xC1 -> CMP XIndirect 6
-        0xC5 -> CMP ZeroPage 3
-        0xC9 -> CMP Immediate 2
-        0xCD -> CMP Absolute 4
-        0xD1 -> CMP IndirectY 5
-        0xD5 -> CMP ZeroPageX 4
-        0xD9 -> CMP AbsoluteY 4
-        0xDD -> CMP AbsoluteX 4
-        0xE0 -> CPX Immediate 2
-        0xE4 -> CPX ZeroPage 3
-        0xEC -> CPX Absolute 4
-        0xC0 -> CPY Immediate 2
-        0xC4 -> CPY ZeroPage 3
-        0xCC -> CPY Absolute 4
-        0xC6 -> DEC ZeroPage 5
-        0xCE -> DEC Absolute 6
-        0xD6 -> DEC ZeroPageX 6
-        0xDE -> DEC AbsoluteX 7
-        0xCA -> DEX Implied 2
-        0x88 -> DEY Implied 2
-        0xE6 -> INC ZeroPage 5
-        0xEE -> INC Absolute 6
-        0xF6 -> INC ZeroPageX 6
-        0xFE -> INC AbsoluteX 7
-        0xE8 -> INX Implied 2
-        0xC8 -> INY Implied 2
+        0x01 -> Or XIndirect 6
+        0x05 -> Or ZeroPage 3
+        0x09 -> Or Immediate 2
+        0x0D -> Or Absolute 4
+        0x11 -> Or IndirectY 5
+        0x15 -> Or ZeroPageX 4
+        0x19 -> Or AbsoluteY 4
+        0x1D -> Or AbsoluteX 4
+        0x21 -> And XIndirect 6
+        0x25 -> And ZeroPage 3
+        0x29 -> And Immediate 2
+        0x2D -> And Absolute 4
+        0x31 -> And IndirectY 5
+        0x35 -> And ZeroPageX 4
+        0x39 -> And AbsoluteY 4
+        0x3D -> And AbsoluteX 4
+        0x41 -> Xor XIndirect 6
+        0x45 -> Xor ZeroPage 3
+        0x49 -> Xor Immediate 2
+        0x4D -> Xor Absolute 4
+        0x51 -> Xor IndirectY 5
+        0x55 -> Xor ZeroPageX 4
+        0x59 -> Xor AbsoluteY 4
+        0x5D -> Xor AbsoluteX 4
+        0x61 -> Adc XIndirect 6
+        0x65 -> Adc ZeroPage 3
+        0x69 -> Adc Immediate 2
+        0x6D -> Adc Absolute 4
+        0x71 -> Adc IndirectY 5
+        0x75 -> Adc ZeroPageX 4
+        0x79 -> Adc AbsoluteY 4
+        0x7D -> Adc AbsoluteX 4
+        0xE1 -> Sbc XIndirect 6
+        0xE5 -> Sbc ZeroPage 3
+        0xE9 -> Sbc Immediate 2
+        0xED -> Sbc Absolute 4
+        0xF1 -> Sbc IndirectY 5
+        0xF5 -> Sbc ZeroPageX 4
+        0xF9 -> Sbc AbsoluteY 4
+        0xFD -> Sbc AbsoluteX 4
+        0xC1 -> Compare XIndirect 6
+        0xC5 -> Compare ZeroPage 3
+        0xC9 -> Compare Immediate 2
+        0xCD -> Compare Absolute 4
+        0xD1 -> Compare IndirectY 5
+        0xD5 -> Compare ZeroPageX 4
+        0xD9 -> Compare AbsoluteY 4
+        0xDD -> Compare AbsoluteX 4
+        0xE0 -> CompareX Immediate 2
+        0xE4 -> CompareX ZeroPage 3
+        0xEC -> CompareX Absolute 4
+        0xC0 -> CompareY Immediate 2
+        0xC4 -> CompareY ZeroPage 3
+        0xCC -> CompareY Absolute 4
+        0xC6 -> Decrement ZeroPage 5
+        0xCE -> Decrement Absolute 6
+        0xD6 -> Decrement ZeroPageX 6
+        0xDE -> Decrement AbsoluteX 7
+        0xCA -> DecrementX Implied 2
+        0x88 -> DecrementY Implied 2
+        0xE6 -> Increment ZeroPage 5
+        0xEE -> Increment Absolute 6
+        0xF6 -> Increment ZeroPageX 6
+        0xFE -> Increment AbsoluteX 7
+        0xE8 -> IncrementX Implied 2
+        0xC8 -> IncrementY Implied 2
         0x06 -> ASL ZeroPage 5
         0x0A -> ASL Implied 2
         0x0E -> ASL Absolute 6
@@ -248,33 +250,33 @@ lookup = \byte ->
         0x24 -> BIT ZeroPage 3
         0x2C -> BIT Absolute 4
         # Nop
-        0x14 -> NOP Implied 4
-        0x1A -> NOP Implied 2
-        0x1C -> NOP Implied 4
-        0x34 -> NOP Implied 4
-        0x3A -> NOP Implied 2
-        0x3C -> NOP Implied 4
-        0x44 -> NOP Implied 3
-        0x54 -> NOP Implied 4
-        0x5A -> NOP Implied 2
-        0x5C -> NOP Implied 4
-        0x64 -> NOP Implied 3
-        0x74 -> NOP Implied 4
-        0x7A -> NOP Implied 2
-        0x7C -> NOP Implied 4
-        0x80 -> NOP Implied 2
-        0x82 -> NOP Implied 2
-        0x89 -> NOP Implied 2
-        0x9C -> NOP Implied 5
-        0xC2 -> NOP Implied 2
-        0xD4 -> NOP Implied 4
-        0xDA -> NOP Implied 2
-        0xDC -> NOP Implied 4
-        0xE2 -> NOP Implied 2
-        0xEA -> NOP Implied 2
-        0xF4 -> NOP Implied 4
-        0xFA -> NOP Implied 2
-        0xFC -> NOP Implied 4
+        0x14 -> Nop Implied 4
+        0x1A -> Nop Implied 2
+        0x1C -> Nop Implied 4
+        0x34 -> Nop Implied 4
+        0x3A -> Nop Implied 2
+        0x3C -> Nop Implied 4
+        0x44 -> Nop Implied 3
+        0x54 -> Nop Implied 4
+        0x5A -> Nop Implied 2
+        0x5C -> Nop Implied 4
+        0x64 -> Nop Implied 3
+        0x74 -> Nop Implied 4
+        0x7A -> Nop Implied 2
+        0x7C -> Nop Implied 4
+        0x80 -> Nop Implied 2
+        0x82 -> Nop Implied 2
+        0x89 -> Nop Implied 2
+        0x9C -> Nop Implied 5
+        0xC2 -> Nop Implied 2
+        0xD4 -> Nop Implied 4
+        0xDA -> Nop Implied 2
+        0xDC -> Nop Implied 4
+        0xE2 -> Nop Implied 2
+        0xEA -> Nop Implied 2
+        0xF4 -> Nop Implied 4
+        0xFA -> Nop Implied 2
+        0xFC -> Nop Implied 4
         # Illegal
         0x02 -> Illegal Implied 2
         0x03 -> Illegal Implied 8
