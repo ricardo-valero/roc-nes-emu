@@ -1,4 +1,4 @@
-module [check]
+module [Member, check, modify]
 
 import Bit exposing [Bit]
 # https://www.oxyron.de/html/opcodes02.html
@@ -42,7 +42,16 @@ mask = \member -> Bit.mask (toBit member)
 
 expect mask Zero == 0b0000_0010
 
-check : Member, U8 -> Bool
-check = \member, byte -> Bit.check (toBit member) byte
+check : Member -> (U8 -> Bool)
+check = \member -> \byte -> Bit.check (toBit member) byte
 
-expect check Carry 0b0101_0001 == Bool.true
+expect (check Carry) 0b0101_0001 == Bool.true
+
+modify : Member, Bool -> (U8 -> U8)
+modify = \member, bit -> \byte ->
+        if bit then
+            Bit.set (toBit member) byte
+        else
+            Bit.clear (toBit member) byte
+
+expect (modify Carry Bool.false) 0b0101_0001 == 0b0101_0000
