@@ -18,17 +18,19 @@ module [lookup]
 AddressingMode : [Implied, Immediate, ZeroPage [Base, X, Y], Absolute [Base, X, Y], Indirect [Base, X, Y], Relative]
 
 Instruction cycle : [
-    # Logical
+    # Logical and arithmetic
     Or [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     And [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     Xor [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    # Arithmetic
     Adc [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     Sbc [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     Compare [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     CompareX [Absolute, Immediate, ZeroPage] cycle,
     CompareY [Absolute, Immediate, ZeroPage] cycle,
-    # Increment and decrement
+    ASL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    LSR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    ROL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
+    ROR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
     Decrement [Absolute, AbsoluteX, ZeroPage, ZeroPageX] cycle,
     DecrementX [Implied] cycle,
     DecrementY [Implied] cycle,
@@ -37,43 +39,8 @@ Instruction cycle : [
     IncrementY [Implied] cycle,
     # Move
     LDA [Absolute, AbsoluteX, AbsoluteY, Immediate, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
-    ASL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
     LDY [Absolute, AbsoluteX, Immediate, ZeroPage, ZeroPageX] cycle,
-    LSR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
-    ROL [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
-    ROR [Absolute, AbsoluteX, Implied, ZeroPage, ZeroPageX] cycle,
     LDX [Absolute, AbsoluteY, Immediate, ZeroPage, ZeroPageY] cycle,
-    # Jump
-    #
-    # Flag (branch on condition)
-    # Flag (set or clear)
-    #
-    # Other
-    BCC [Relative] cycle,
-    BCS [Relative] cycle,
-    BEQ [Relative] cycle,
-    BIT [Absolute, ZeroPage] cycle,
-    BMI [Relative] cycle,
-    BNE [Relative] cycle,
-    BPL [Relative] cycle,
-    BRK [Immediate] cycle,
-    BVC [Relative] cycle,
-    BVS [Relative] cycle,
-    CLC [Implied] cycle,
-    CLD [Implied] cycle,
-    CLI [Implied] cycle,
-    CLV [Implied] cycle,
-    JMP [Absolute, Indirect] cycle,
-    JSR [Absolute] cycle,
-    PHA [Implied] cycle,
-    PHP [Implied] cycle,
-    PLA [Implied] cycle,
-    PLP [Implied] cycle,
-    RTI [Implied] cycle,
-    RTS [Implied] cycle,
-    SEC [Implied] cycle,
-    SED [Implied] cycle,
-    SEI [Implied] cycle,
     STA [Absolute, AbsoluteX, AbsoluteY, XIndirect, IndirectY, ZeroPage, ZeroPageX] cycle,
     STX [Absolute, ZeroPage, ZeroPageY] cycle,
     STY [Absolute, ZeroPage, ZeroPageX] cycle,
@@ -83,6 +50,35 @@ Instruction cycle : [
     TXA [Implied] cycle,
     TXS [Implied] cycle,
     TYA [Implied] cycle,
+    # Flag (branch on condition)
+    BCC [Relative] cycle,
+    BCS [Relative] cycle,
+    BEQ [Relative] cycle,
+    BMI [Relative] cycle,
+    BNE [Relative] cycle,
+    BPL [Relative] cycle,
+    BVC [Relative] cycle,
+    BVS [Relative] cycle,
+    # Flag (set or clear)
+    SEC [Implied] cycle,
+    SED [Implied] cycle,
+    SEI [Implied] cycle,
+    CLC [Implied] cycle,
+    CLD [Implied] cycle,
+    CLI [Implied] cycle,
+    CLV [Implied] cycle,
+    # Jump
+    # Other stack ops
+    BIT [Absolute, ZeroPage] cycle,
+    BRK [Implied] cycle,
+    JMP [Absolute, Indirect] cycle,
+    JSR [Absolute] cycle,
+    PHA [Implied] cycle,
+    PHP [Implied] cycle,
+    PLA [Implied] cycle,
+    PLP [Implied] cycle,
+    RTI [Implied] cycle,
+    RTS [Implied] cycle,
     # Nop
     Nop [Implied] cycle,
     # Illegal
@@ -158,10 +154,10 @@ lookup = \byte ->
         0xEE -> Increment Absolute 6
         0xF6 -> Increment ZeroPageX 6
         0xFE -> Increment AbsoluteX 7
-        0xE8 -> IncrementX Implied 2
-        0xC8 -> IncrementY Implied 2
+        0xE8 -> IncrementX Implied 2 # Implied X
+        0xC8 -> IncrementY Implied 2 # Implied Y
         0x06 -> ASL ZeroPage 5
-        0x0A -> ASL Implied 2
+        0x0A -> ASL Implied 2 # Implied A
         0x0E -> ASL Absolute 6
         0x16 -> ASL ZeroPageX 6
         0x1E -> ASL AbsoluteX 7
@@ -244,7 +240,7 @@ lookup = \byte ->
         0xD8 -> CLD Implied 2
         0xF8 -> SED Implied 2
         # Other
-        0x00 -> BRK Immediate 7
+        0x00 -> BRK Implied 7
         0x40 -> RTI Implied 6
         0x60 -> RTS Implied 6
         0x24 -> BIT ZeroPage 3

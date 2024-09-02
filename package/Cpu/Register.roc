@@ -1,4 +1,4 @@
-module [read16, write16, read8, write8, readStatus, writeStatus]
+module [Register, read16, write16, read8, write8, readStatus, writeStatus]
 
 Member16 : [ProgramCounter]
 Member8 : [StackPointer, Accumulator, X, Y, Status]
