@@ -1,4 +1,4 @@
-module [Memory, read8, write8, read16, write16]
+module [Memory, read8, write8, read16, write16, load]
 
 Memory : List U8
 
@@ -21,3 +21,14 @@ write16 = \memory, pos, data ->
     hi = Num.shiftRightZfBy data 8 |> Num.toU8
     lo = Num.bitwiseAnd data 0xFF |> Num.toU8
     memory |> write8 pos lo |> write8 (pos + 1) hi
+
+load : Memory, List U8 -> Memory
+load = \mem, program ->
+    helper = \currentMem, index ->
+        if index >= List.len program then
+            currentMem
+        else
+            updatedMem = Memory.write8 currentMem (0x8000 + Num.toU16 index) (List.get program index |> Result.withDefault 0)
+            helper updatedMem (index + 1)
+
+    Memory.write16 (helper mem 0) 0xFFFC 0x8000
