@@ -1,4 +1,4 @@
-module [Cpu]
+module [Cpu, boot]
 
 import Memory exposing [Memory]
 import Register exposing [Register]
@@ -6,18 +6,6 @@ import Register exposing [Register]
 Cpu : {
     register : Register,
     memory : Memory,
-}
-
-newCpu : Cpu
-newCpu = {
-    register: {
-        programCounter: 0,
-        accumulator: 0,
-        status: 0,
-        x: 0,
-        y: 0,
-    },
-    memory: List.repeat 0 0xFFFF,
 }
 
 AddressingMode : [
@@ -92,12 +80,17 @@ xor = \cpu, mode ->
     result = value |> Num.bitwiseXor cpu.register.accumulator
     cpu |> &register (cpu.register |> &accumulator result)
 
-lda : Cpu, AddressingMode -> Cpu
-lda = \cpu, mode ->
-    addr = getOperandAddress cpu mode
-    value = Memory.read8 cpu.memory addr
-    reg = cpu.register |> &accumulator value |> updateFlags value
-    cpu |> &register reg
+# lda, ldx, ldy
+ld : Cpu, [A, X, Y], AddressingMode -> Cpu
+ld = \cpu, m, mode ->
+    addr = cpu |> getOperandAddress mode
+    data = cpu.memory |> Memory.read8 addr
+    reg =
+        when m is
+            A -> cpu.register |> &accumulator data
+            X -> cpu.register |> &x data
+            Y -> cpu.register |> &y data
+    cpu |> &register (reg |> updateFlags data)
 
 sta : Cpu, AddressingMode -> Cpu
 sta = \cpu, mode ->
@@ -117,47 +110,49 @@ ta = \cpu, m ->
             reg = cpu.register |> &y cpu.register.accumulator
             cpu |> &register (updateFlags reg reg.y)
 
-# inx, iny
-in : Cpu, [X, Y] -> Cpu
-in = \cpu, m ->
-    when m is
-        X ->
-            result = Num.addWrap cpu.register.x 1
-            reg = cpu.register |> &x result
-            cpu |> &register (updateFlags reg reg.x)
-
-        Y ->
-            result = Num.addWrap cpu.register.y 1
-            reg = cpu.register |> &y result
-            cpu |> &register (updateFlags reg reg.y)
-
 inc = \cpu, mode ->
     addr = getOperandAddress cpu mode
     data = Memory.read8 cpu.memory addr
     result = data |> Num.addWrap 1
     cpu
-    |> &memory (Memory.write8 cpu.memory addr result)
-    |> &register (updateFlags cpu.register result)
+    |> &memory (cpu.memory |> Memory.write8 addr result)
+    |> &register (cpu.register |> updateFlags result)
 
 dec = \cpu, mode ->
     addr = getOperandAddress cpu mode
     data = Memory.read8 cpu.memory addr
     result = data |> Num.subWrap 1
     cpu
-    |> &memory (Memory.write8 cpu.memory addr result)
-    |> &register (updateFlags cpu.register result)
+    |> &memory (cpu.memory |> Memory.write8 addr result)
+    |> &register (cpu.register |> updateFlags result)
+
+# inx, iny
+in : Cpu, [X, Y] -> Cpu
+in = \cpu, m ->
+    reg =
+        when m is
+            X ->
+                result = cpu.register |> .x |> Num.addWrap 1
+                cpu.register |> &x result |> updateFlags result
+
+            Y ->
+                result = cpu.register |> .y |> Num.addWrap 1
+                cpu.register |> &y result |> updateFlags result
+    cpu |> &register reg
 
 # dex, dey
 de : Cpu, [X, Y] -> Cpu
 de = \cpu, m ->
-    when m is
-        X ->
-            reg = cpu.register |> &x (Num.subWrap cpu.register.x 1)
-            cpu |> &register (updateFlags reg reg.x)
+    reg =
+        when m is
+            X ->
+                result = cpu.register.x |> Num.subWrap 1
+                cpu.register |> &x result |> updateFlags result
 
-        Y ->
-            reg = cpu.register |> &y (Num.subWrap cpu.register.y 1)
-            cpu |> &register (updateFlags reg reg.y)
+            Y ->
+                result = cpu.register.y |> Num.subWrap 1
+                cpu.register |> &y result |> updateFlags result
+    cpu |> &register reg
 
 updateFlags : Register, U8 -> Register
 updateFlags = \reg, result ->
@@ -198,14 +193,36 @@ run = \cpu ->
             0x55 -> current |> xor (ZeroPage X) |> run
             0x41 -> current |> xor (IndexedIndirect X) |> run
             0x51 -> current |> xor (IndirectIndexed Y) |> run
-            0xA9 -> current |> lda Immediate |> count |> run
-            0xA5 -> current |> lda (ZeroPage None) |> count |> run
-            0xB5 -> current |> lda (ZeroPage X) |> count |> run
-            0xAD -> current |> lda (Absolute None) |> count |> run
-            0xBD -> current |> lda (Absolute X) |> count |> run
-            0xB9 -> current |> lda (Absolute Y) |> count |> run
-            0xA1 -> current |> lda (IndexedIndirect X) |> count |> run
-            0xB1 -> current |> lda (IndirectIndexed Y) |> count |> run
+            0xE8 -> current |> in X |> run
+            0xC8 -> current |> in Y |> run
+            0xE6 -> current |> inc (ZeroPage None) |> run
+            0xEE -> current |> inc (Absolute None) |> run
+            0xF6 -> current |> inc (ZeroPage X) |> run
+            0xFE -> current |> inc (Absolute X) |> run
+            0xCA -> current |> de X |> run
+            0x88 -> current |> de Y |> run
+            0xC6 -> current |> dec (ZeroPage None) |> run
+            0xCE -> current |> dec (Absolute None) |> run
+            0xD6 -> current |> dec (ZeroPage X) |> run
+            0xDE -> current |> dec (Absolute X) |> run
+            0xA9 -> current |> ld A Immediate |> count |> run
+            0xA5 -> current |> ld A (ZeroPage None) |> count |> run
+            0xB5 -> current |> ld A (ZeroPage X) |> count |> run
+            0xAD -> current |> ld A (Absolute None) |> count |> run
+            0xBD -> current |> ld A (Absolute X) |> count |> run
+            0xB9 -> current |> ld A (Absolute Y) |> count |> run
+            0xA1 -> current |> ld A (IndexedIndirect X) |> count |> run
+            0xB1 -> current |> ld A (IndirectIndexed Y) |> count |> run
+            0xA2 -> current |> ld X Immediate |> count |> run
+            0xAE -> current |> ld X (Absolute None) |> count |> run
+            0xBE -> current |> ld X (Absolute Y) |> count |> run
+            0xA6 -> current |> ld X (ZeroPage None) |> count |> run
+            0xB6 -> current |> ld X (ZeroPage Y) |> count |> run
+            0xA0 -> current |> ld Y Immediate |> count |> run
+            0xAC -> current |> ld Y (Absolute None) |> count |> run
+            0xBC -> current |> ld Y (Absolute X) |> count |> run
+            0xA4 -> current |> ld Y (ZeroPage None) |> count |> run
+            0xB4 -> current |> ld Y (ZeroPage X) |> count |> run
             0x85 -> current |> sta (ZeroPage None) |> count |> run
             0x95 -> current |> sta (ZeroPage X) |> count |> run
             0x8D -> current |> sta (Absolute None) |> count |> run
@@ -214,27 +231,11 @@ run = \cpu ->
             0x81 -> current |> sta (IndexedIndirect X) |> count |> run
             0x91 -> current |> sta (IndirectIndexed Y) |> count |> run
             0xAA -> current |> ta X |> run
-            0xE8 -> current |> in X |> run
-            0xC8 -> current |> in Y |> run
-            0xE6 -> current |> inc (ZeroPage None) |> run
-            0xEE -> current |> inc (Absolute None) |> run
-            0xF6 -> current |> inc (ZeroPage X) |> run
-            0xFE -> current |> inc (Absolute X) |> run
-            0xC6 -> current |> dec (ZeroPage None) |> run
-            0xCE -> current |> dec (Absolute None) |> run
-            0xD6 -> current |> dec (ZeroPage X) |> run
-            0xDE -> current |> dec (Absolute X) |> run
-            0xCA -> current |> de X |> run
-            0x88 -> current |> de Y |> run
             0x00 -> current
             _ -> crash "Unimplemented opcode $(Num.toStr code)"
 
 load : Cpu, List U8 -> Cpu
 load = \cpu, program ->
-    cpu |> &memory (loadMem cpu.memory program)
-
-# load2 : Cpu, List U8 -> Cpu
-loadMem = \mem, program ->
     helper = \currentMem, index ->
         if index >= List.len program then
             currentMem
@@ -242,8 +243,8 @@ loadMem = \mem, program ->
             updatedMem = Memory.write8 currentMem (0x8000 + Num.toU16 index) (List.get program index |> Result.withDefault 0)
             helper updatedMem (index + 1)
 
-    loadedMem = helper mem 0
-    Memory.write16 loadedMem 0xFFFC 0x8000
+    mem = Memory.write16 (helper cpu.memory 0) 0xFFFC 0x8000
+    cpu |> &memory mem
 
 reset : Cpu -> Cpu
 reset = \cpu ->
@@ -257,35 +258,45 @@ reset = \cpu ->
         },
     }
 
-main : Cpu, List U8 -> Cpu
-main = \cpu, program ->
+boot : Cpu, List U8 -> Cpu
+boot = \cpu, program ->
     cpu
     |> load program
     |> reset
     |> run
 
-# Tests
+new : Cpu
+new = {
+    register: {
+        programCounter: 0,
+        accumulator: 0,
+        status: 0,
+        x: 0,
+        y: 0,
+    },
+    memory: List.repeat 0 0xFFFF,
+}
 
 expect
-    cpu = newCpu |> main [0xA9, 0x05, 0x00]
+    cpu = new |> boot [0xA9, 0x05, 0x00]
     cpu.register.accumulator == 5 && (Num.bitwiseAnd cpu.register.status 0b0000_0010 == 0) && (Num.bitwiseAnd cpu.register.status 0b1000_0000 == 0)
 
 expect
-    cpu = newCpu |> main [0xA9, 0x00, 0x00]
+    cpu = new |> boot [0xA9, 0x00, 0x00]
     Num.bitwiseAnd cpu.register.status 0b0000_0010 == 0b10
 
 expect
-    cpu = newCpu |> main [0xA9, 0x0A, 0xAA, 0x00]
+    cpu = new |> boot [0xA9, 0x0A, 0xAA, 0x00]
     cpu.register.x == 10
 
 expect
-    cpu = newCpu |> main [0xA9, 0xC0, 0xAA, 0xE8, 0x00]
+    cpu = new |> boot [0xA9, 0xC0, 0xAA, 0xE8, 0x00]
     cpu.register.x == 0xC1
 
 expect
-    cpu = newCpu |> main [0xA9, 0xFF, 0xAA, 0xE8, 0xE8, 0x00]
+    cpu = new |> boot [0xA9, 0xFF, 0xAA, 0xE8, 0xE8, 0x00]
     cpu.register.x == 1
 
 expect
-    cpu = newCpu |> &memory (Memory.write8 newCpu.memory 0x10 0x55) |> main [0xA5, 0x10, 0x00]
+    cpu = new |> &memory (Memory.write8 new.memory 0x10 0x55) |> boot [0xA5, 0x10, 0x00]
     cpu.register.accumulator == 0x55
