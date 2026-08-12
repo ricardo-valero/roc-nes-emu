@@ -1,4 +1,3 @@
-module [step]
 # BYVAL contents of a memory location to the __
 # BYREF contents of the __ into memory.
 #
@@ -10,243 +9,262 @@ module [step]
 # Pull -> Pop
 # JumpToSubroutine (JSR) -> Call
 
-import Cpu.Register
-import Cpu.Register.Status
-import Memory
+import /Cpu/Register
+import /Memory
 
-Step : [
-    Math
-        (
-            [Or, And, Xor, Adc, Sbc, Compare [A, X, Y], Inc, Dec, Asl, Lsr, RotateLeft, RotateRight, Bit],
-            [ByVal [Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX], Immediate, Implied [A, X, Y], Inplace [Absolute, AbsoluteX, ZeroPage, ZeroPageX]],
-        ),
-    Move
-        (
-            [Load, Store, Transfer],
-            [A, SP, X, Y],
-            [ByRef [Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX, ZeroPageY], ByVal [Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX, ZeroPageY], Immediate, Implied [A, SP, X, Y]],
-        ),
-    Stack
-        (
-            [Pop, Push],
-            [Implied [A, Status]],
-        ),
-    Flow
-        (
-            [Jump, Call, Branch],
-            [Always, On (Cpu.Register.Status.Member, Bool)],
-            [ByVal [Absolute, ZeroPage], Indirect, Relative],
-        ),
-    Modify
-        (
-            [Status],
-            Cpu.Register.Status.Member,
-            Bool,
-        ),
-    Misc
-        (
-            [ForceInterrupt, ReturnFromInterrupt, ReturnFromSubroutine],
-            [Implied [None]],
-        ),
+# The [Carry, Zero, InterruptDisable, DecimalMode, Break, Overflow, Negative]
+# unions below are structural copies of Status.Member: the nightly compiler
+# cannot yet reference nested types through subdirectory imports. Values still
+# flow into the nominal type at call sites.
+Step := [
+    Math(
+        [Or, And, Xor, Adc, Sbc, Compare([A, X, Y]), Inc, Dec, Asl, Lsr, RotateLeft, RotateRight, Bit],
+        [ByVal([Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX]), Immediate, Implied([A, X, Y]), Inplace([Absolute, AbsoluteX, ZeroPage, ZeroPageX])],
+    ),
+    Move(
+        [Load, Store, Transfer],
+        [A, SP, X, Y],
+        [ByRef([Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX, ZeroPageY]), ByVal([Absolute, AbsoluteX, AbsoluteY, IndirectY, XIndirect, ZeroPage, ZeroPageX, ZeroPageY]), Immediate, Implied([A, SP, X, Y])],
+    ),
+    Stack(
+        [Pop, Push],
+        [Implied([A, Status])],
+    ),
+    Flow(
+        [Jump, Call, Branch],
+        [Always, On([Carry, Zero, InterruptDisable, DecimalMode, Break, Overflow, Negative], Bool)],
+        [ByVal([Absolute, ZeroPage]), Indirect, Relative],
+    ),
+    Modify(
+        [Status],
+        [Carry, Zero, InterruptDisable, DecimalMode, Break, Overflow, Negative],
+        Bool,
+    ),
+    Misc(
+        [ForceInterrupt, ReturnFromInterrupt, ReturnFromSubroutine],
+        [Implied([None])],
+    ),
     Unknown,
-]
+].{
+    fetch = |emu| {
+        pc = Register.read16(ProgramCounter)
+        addr = pc(emu.reg)
+        byte = Memory.read8(emu.ram, addr)
+        advance = Register.write16(ProgramCounter, addr.plus_wrap(1))
+        T({ ..emu, reg: advance(emu.reg) }, byte)
+    }
 
-Emulator : {
-    reg : Cpu.Register.Register,
-    ram : Memory.Memory,
+    # branch : Emulator, Status.Member, Bool -> Emulator
+    branch = |emu, offset| {
+        pc = Register.read16(ProgramCounter)
+        add_result = pc(emu.reg).plus_wrap(offset.to_u16())
+        program_counter =
+            if offset < 0x80 {
+                add_result
+            } else {
+                add_result.minus_wrap(0x100)
+            }
+        jump = Register.write16(ProgramCounter, program_counter)
+        { ..emu, reg: jump(emu.reg) }
+    }
+
+    handle : Step, Emulator -> Emulator
+    handle = |s, emu0|
+        match s {
+            Modify(type, member, value) =>
+                match type {
+                    Status => {
+                        put = Register.write_status(member, value)
+                        { ..emu0, reg: put(emu0.reg) }
+                    }
+                }
+
+            Flow(type, condition, _addressing) =>
+                match fetch(emu0) {
+                    T(emu, byte) => {
+                        c =
+                            match condition {
+                                Always => Bool.True
+                                On(f, b) => {
+                                    get = Register.read_status(f)
+                                    get(emu.reg) == b
+                                }
+                            }
+                        if c {
+                            match type {
+                                Branch => branch(emu, byte)
+                                _ => emu
+                            }
+                        } else {
+                            emu
+                        }
+                    }
+                }
+
+            _ => emu0
+        }
+
+    step : U8 -> Step
+    step = |byte|
+        match byte {
+            0x09 => Math(Or, Immediate)
+            0x05 => Math(Or, ByVal(ZeroPage))
+            0x15 => Math(Or, ByVal(ZeroPageX))
+            0x0D => Math(Or, ByVal(Absolute))
+            0x1D => Math(Or, ByVal(AbsoluteX))
+            0x19 => Math(Or, ByVal(AbsoluteY))
+            0x01 => Math(Or, ByVal(XIndirect))
+            0x11 => Math(Or, ByVal(IndirectY))
+            0x29 => Math(And, Immediate)
+            0x25 => Math(And, ByVal(ZeroPage))
+            0x35 => Math(And, ByVal(ZeroPageX))
+            0x2D => Math(And, ByVal(Absolute))
+            0x3D => Math(And, ByVal(AbsoluteX))
+            0x39 => Math(And, ByVal(AbsoluteY))
+            0x21 => Math(And, ByVal(XIndirect))
+            0x31 => Math(And, ByVal(IndirectY))
+            0x49 => Math(Xor, Immediate)
+            0x45 => Math(Xor, ByVal(ZeroPage))
+            0x55 => Math(Xor, ByVal(ZeroPageX))
+            0x4D => Math(Xor, ByVal(Absolute))
+            0x5D => Math(Xor, ByVal(AbsoluteX))
+            0x59 => Math(Xor, ByVal(AbsoluteY))
+            0x41 => Math(Xor, ByVal(XIndirect))
+            0x51 => Math(Xor, ByVal(IndirectY))
+            0x69 => Math(Adc, Immediate)
+            0x65 => Math(Adc, ByVal(ZeroPage))
+            0x75 => Math(Adc, ByVal(ZeroPageX))
+            0x6D => Math(Adc, ByVal(Absolute))
+            0x7D => Math(Adc, ByVal(AbsoluteX))
+            0x79 => Math(Adc, ByVal(AbsoluteY))
+            0x61 => Math(Adc, ByVal(XIndirect))
+            0x71 => Math(Adc, ByVal(IndirectY))
+            0xE9 => Math(Sbc, Immediate)
+            0xE5 => Math(Sbc, ByVal(ZeroPage))
+            0xF5 => Math(Sbc, ByVal(ZeroPageX))
+            0xED => Math(Sbc, ByVal(Absolute))
+            0xFD => Math(Sbc, ByVal(AbsoluteX))
+            0xF9 => Math(Sbc, ByVal(AbsoluteY))
+            0xE1 => Math(Sbc, ByVal(XIndirect))
+            0xF1 => Math(Sbc, ByVal(IndirectY))
+            0xC9 => Math(Compare(A), Immediate)
+            0xC5 => Math(Compare(A), ByVal(ZeroPage))
+            0xD5 => Math(Compare(A), ByVal(ZeroPageX))
+            0xCD => Math(Compare(A), ByVal(Absolute))
+            0xDD => Math(Compare(A), ByVal(AbsoluteX))
+            0xD9 => Math(Compare(A), ByVal(AbsoluteY))
+            0xC1 => Math(Compare(A), ByVal(XIndirect))
+            0xD1 => Math(Compare(A), ByVal(IndirectY))
+            0xE0 => Math(Compare(X), Immediate)
+            0xE4 => Math(Compare(X), ByVal(ZeroPage))
+            0xEC => Math(Compare(X), ByVal(Absolute))
+            0xC0 => Math(Compare(Y), Immediate)
+            0xC4 => Math(Compare(Y), ByVal(ZeroPage))
+            0xCC => Math(Compare(Y), ByVal(Absolute))
+            0xCA => Math(Dec, Implied(X))
+            0x88 => Math(Dec, Implied(Y))
+            0xC6 => Math(Dec, Inplace(ZeroPage))
+            0xD6 => Math(Dec, Inplace(ZeroPageX))
+            0xCE => Math(Dec, Inplace(Absolute))
+            0xDE => Math(Dec, Inplace(AbsoluteX))
+            0xE8 => Math(Inc, Implied(X))
+            0xC8 => Math(Inc, Implied(Y))
+            0xE6 => Math(Inc, Inplace(ZeroPage))
+            0xF6 => Math(Inc, Inplace(ZeroPageX))
+            0xEE => Math(Inc, Inplace(Absolute))
+            0xFE => Math(Inc, Inplace(AbsoluteX))
+            0x0A => Math(Asl, Implied(A))
+            0x06 => Math(Asl, Inplace(ZeroPage))
+            0x16 => Math(Asl, Inplace(ZeroPageX))
+            0x0E => Math(Asl, Inplace(Absolute))
+            0x1E => Math(Asl, Inplace(AbsoluteX))
+            0x4A => Math(Lsr, Implied(A))
+            0x46 => Math(Lsr, Inplace(ZeroPage))
+            0x56 => Math(Lsr, Inplace(ZeroPageX))
+            0x4E => Math(Lsr, Inplace(Absolute))
+            0x5E => Math(Lsr, Inplace(AbsoluteX))
+            0x2A => Math(RotateLeft, Implied(A))
+            0x26 => Math(RotateLeft, Inplace(ZeroPage))
+            0x36 => Math(RotateLeft, Inplace(ZeroPageX))
+            0x2E => Math(RotateLeft, Inplace(Absolute))
+            0x3E => Math(RotateLeft, Inplace(AbsoluteX))
+            0x6A => Math(RotateRight, Implied(A))
+            0x66 => Math(RotateRight, Inplace(ZeroPage))
+            0x76 => Math(RotateRight, Inplace(ZeroPageX))
+            0x6E => Math(RotateRight, Inplace(Absolute))
+            0x7E => Math(RotateRight, Inplace(AbsoluteX))
+            0x24 => Math(Bit, ByVal(ZeroPage))
+            0x2C => Math(Bit, ByVal(Absolute))
+            0xA9 => Move(Load, A, Immediate)
+            0xA5 => Move(Load, A, ByVal(ZeroPage))
+            0xB5 => Move(Load, A, ByVal(ZeroPageX))
+            0xAD => Move(Load, A, ByVal(Absolute))
+            0xBD => Move(Load, A, ByVal(AbsoluteX))
+            0xB9 => Move(Load, A, ByVal(AbsoluteY))
+            0xA1 => Move(Load, A, ByVal(XIndirect))
+            0xB1 => Move(Load, A, ByVal(IndirectY))
+            0xA2 => Move(Load, X, Immediate)
+            0xA6 => Move(Load, X, ByVal(ZeroPage))
+            0xB6 => Move(Load, X, ByVal(ZeroPageY))
+            0xAE => Move(Load, X, ByVal(Absolute))
+            0xBE => Move(Load, X, ByVal(AbsoluteY))
+            0xA0 => Move(Load, Y, Immediate)
+            0xA4 => Move(Load, Y, ByVal(ZeroPage))
+            0xB4 => Move(Load, Y, ByVal(ZeroPageY))
+            0xAC => Move(Load, Y, ByVal(Absolute))
+            0xBC => Move(Load, Y, ByVal(AbsoluteY))
+            0x85 => Move(Store, A, ByRef(ZeroPage))
+            0x95 => Move(Store, A, ByRef(ZeroPageX))
+            0x8D => Move(Store, A, ByRef(Absolute))
+            0x9D => Move(Store, A, ByRef(AbsoluteX))
+            0x99 => Move(Store, A, ByRef(AbsoluteY))
+            0x81 => Move(Store, A, ByRef(XIndirect))
+            0x91 => Move(Store, A, ByRef(IndirectY))
+            0x86 => Move(Store, X, ByRef(ZeroPage))
+            0x96 => Move(Store, X, ByRef(ZeroPageY))
+            0x8E => Move(Store, X, ByRef(Absolute))
+            0x84 => Move(Store, Y, ByRef(ZeroPage))
+            0x94 => Move(Store, Y, ByRef(ZeroPageX))
+            0x8C => Move(Store, Y, ByRef(Absolute))
+            0xAA => Move(Transfer, A, Implied(X))
+            0x8A => Move(Transfer, X, Implied(A))
+            0xA8 => Move(Transfer, A, Implied(Y))
+            0x98 => Move(Transfer, Y, Implied(A))
+            0x9A => Move(Transfer, SP, Implied(X))
+            0xBA => Move(Transfer, X, Implied(SP))
+            0x18 => Modify(Status, Carry, Bool.False)
+            0x38 => Modify(Status, Carry, Bool.True)
+            0x58 => Modify(Status, InterruptDisable, Bool.False)
+            0x78 => Modify(Status, InterruptDisable, Bool.True)
+            0xB8 => Modify(Status, Overflow, Bool.False)
+            0xD8 => Modify(Status, DecimalMode, Bool.False)
+            0xF8 => Modify(Status, DecimalMode, Bool.True)
+            0x4C => Flow(Jump, Always, ByVal(Absolute)) # or ByRef?
+            0x6C => Flow(Jump, Always, Indirect) # ReadMemAddr Addr
+            0x20 => Flow(Call, Always, ByVal(Absolute))
+            0x10 => Flow(Branch, On(Negative, Bool.False), Relative)
+            0x30 => Flow(Branch, On(Negative, Bool.True), Relative)
+            0x50 => Flow(Branch, On(Overflow, Bool.False), Relative)
+            0x70 => Flow(Branch, On(Overflow, Bool.True), Relative)
+            0x90 => Flow(Branch, On(Carry, Bool.False), Relative)
+            0xB0 => Flow(Branch, On(Carry, Bool.True), Relative)
+            0xD0 => Flow(Branch, On(Zero, Bool.False), Relative)
+            0xF0 => Flow(Branch, On(Zero, Bool.True), Relative)
+            0x00 => Misc(ForceInterrupt, Implied(None))
+            0x60 => Misc(ReturnFromSubroutine, Implied(None))
+            0x40 => Misc(ReturnFromInterrupt, Implied(None))
+            0x48 => Stack(Push, Implied(A))
+            0x08 => Stack(Push, Implied(Status))
+            0x68 => Stack(Pop, Implied(A))
+            0x28 => Stack(Pop, Implied(Status))
+            _ => Unknown
+        }
 }
 
-fetch = \{ reg, ram } ->
-    addr = reg.programCounter
-    byte = Memory.read ram addr
-    T { reg: { reg & programCounter: Num.addWrap addr 1 }, ram } byte
-
-# branch : Emulator, Cpu.Register.Status.Member, Bool -> Emulator
-branch = \emu, offset ->
-    programCounter =
-        addResult = Num.addWrap emu.reg.programCounter (Num.toU16 offset)
-        if offset < 0x80 then
-            addResult
-        else
-            Num.subWrap addResult 0x100
-    { emu & reg: (Cpu.Register.write16 ProgramCounter programCounter) emu.reg }
-
-handle : Step, Emulator -> Emulator
-handle = \s, emu0 ->
-    when s is
-        Modify (type, member, value) ->
-            when type is
-                Status -> { emu0 & reg: (Cpu.Register.writeStatus member value) emu0.reg }
-
-        Flow (type, condition, addressing) ->
-            (T emu byte) = fetch emu0
-            c =
-                when condition is
-                    Always -> Bool.true
-                    On (f, b) -> (Cpu.Register.readStatus f) emu.reg == b
-            if c then
-                when type is
-                    Branch -> branch emu byte
-                    _ -> emu
-            else
-                emu
-
-        _ -> emu0
-
-step : U8 -> Step
-step = \byte ->
-    when byte is
-        0x09 -> Math (Or, Immediate)
-        0x05 -> Math (Or, ByVal ZeroPage)
-        0x15 -> Math (Or, ByVal ZeroPageX)
-        0x0D -> Math (Or, ByVal Absolute)
-        0x1D -> Math (Or, ByVal AbsoluteX)
-        0x19 -> Math (Or, ByVal AbsoluteY)
-        0x01 -> Math (Or, ByVal XIndirect)
-        0x11 -> Math (Or, ByVal IndirectY)
-        0x29 -> Math (And, Immediate)
-        0x25 -> Math (And, ByVal ZeroPage)
-        0x35 -> Math (And, ByVal ZeroPageX)
-        0x2D -> Math (And, ByVal Absolute)
-        0x3D -> Math (And, ByVal AbsoluteX)
-        0x39 -> Math (And, ByVal AbsoluteY)
-        0x21 -> Math (And, ByVal XIndirect)
-        0x31 -> Math (And, ByVal IndirectY)
-        0x49 -> Math (Xor, Immediate)
-        0x45 -> Math (Xor, ByVal ZeroPage)
-        0x55 -> Math (Xor, ByVal ZeroPageX)
-        0x4D -> Math (Xor, ByVal Absolute)
-        0x5D -> Math (Xor, ByVal AbsoluteX)
-        0x59 -> Math (Xor, ByVal AbsoluteY)
-        0x41 -> Math (Xor, ByVal XIndirect)
-        0x51 -> Math (Xor, ByVal IndirectY)
-        0x69 -> Math (Adc, Immediate)
-        0x65 -> Math (Adc, ByVal ZeroPage)
-        0x75 -> Math (Adc, ByVal ZeroPageX)
-        0x6D -> Math (Adc, ByVal Absolute)
-        0x7D -> Math (Adc, ByVal AbsoluteX)
-        0x79 -> Math (Adc, ByVal AbsoluteY)
-        0x61 -> Math (Adc, ByVal XIndirect)
-        0x71 -> Math (Adc, ByVal IndirectY)
-        0xE9 -> Math (Sbc, Immediate)
-        0xE5 -> Math (Sbc, ByVal ZeroPage)
-        0xF5 -> Math (Sbc, ByVal ZeroPageX)
-        0xED -> Math (Sbc, ByVal Absolute)
-        0xFD -> Math (Sbc, ByVal AbsoluteX)
-        0xF9 -> Math (Sbc, ByVal AbsoluteY)
-        0xE1 -> Math (Sbc, ByVal XIndirect)
-        0xF1 -> Math (Sbc, ByVal IndirectY)
-        0xC9 -> Math (Compare A, Immediate)
-        0xC5 -> Math (Compare A, ByVal ZeroPage)
-        0xD5 -> Math (Compare A, ByVal ZeroPageX)
-        0xCD -> Math (Compare A, ByVal Absolute)
-        0xDD -> Math (Compare A, ByVal AbsoluteX)
-        0xD9 -> Math (Compare A, ByVal AbsoluteY)
-        0xC1 -> Math (Compare A, ByVal XIndirect)
-        0xD1 -> Math (Compare A, ByVal IndirectY)
-        0xE0 -> Math (Compare X, Immediate)
-        0xE4 -> Math (Compare X, ByVal ZeroPage)
-        0xEC -> Math (Compare X, ByVal Absolute)
-        0xC0 -> Math (Compare Y, Immediate)
-        0xC4 -> Math (Compare Y, ByVal ZeroPage)
-        0xCC -> Math (Compare Y, ByVal Absolute)
-        0xCA -> Math (Dec, Implied X)
-        0x88 -> Math (Dec, Implied Y)
-        0xC6 -> Math (Dec, Inplace ZeroPage)
-        0xD6 -> Math (Dec, Inplace ZeroPageX)
-        0xCE -> Math (Dec, Inplace Absolute)
-        0xDE -> Math (Dec, Inplace AbsoluteX)
-        0xE8 -> Math (Inc, Implied X)
-        0xC8 -> Math (Inc, Implied Y)
-        0xE6 -> Math (Inc, Inplace ZeroPage)
-        0xF6 -> Math (Inc, Inplace ZeroPageX)
-        0xEE -> Math (Inc, Inplace Absolute)
-        0xFE -> Math (Inc, Inplace AbsoluteX)
-        0x0A -> Math (Asl, Implied A)
-        0x06 -> Math (Asl, Inplace ZeroPage)
-        0x16 -> Math (Asl, Inplace ZeroPageX)
-        0x0E -> Math (Asl, Inplace Absolute)
-        0x1E -> Math (Asl, Inplace AbsoluteX)
-        0x4A -> Math (Lsr, Implied A)
-        0x46 -> Math (Lsr, Inplace ZeroPage)
-        0x56 -> Math (Lsr, Inplace ZeroPageX)
-        0x4E -> Math (Lsr, Inplace Absolute)
-        0x5E -> Math (Lsr, Inplace AbsoluteX)
-        0x2A -> Math (RotateLeft, Implied A)
-        0x26 -> Math (RotateLeft, Inplace ZeroPage)
-        0x36 -> Math (RotateLeft, Inplace ZeroPageX)
-        0x2E -> Math (RotateLeft, Inplace Absolute)
-        0x3E -> Math (RotateLeft, Inplace AbsoluteX)
-        0x6A -> Math (RotateRight, Implied A)
-        0x66 -> Math (RotateRight, Inplace ZeroPage)
-        0x76 -> Math (RotateRight, Inplace ZeroPageX)
-        0x6E -> Math (RotateRight, Inplace Absolute)
-        0x7E -> Math (RotateRight, Inplace AbsoluteX)
-        0x24 -> Math (Bit, ByVal ZeroPage)
-        0x2C -> Math (Bit, ByVal Absolute)
-        0xA9 -> Move (Load, A, Immediate)
-        0xA5 -> Move (Load, A, ByVal ZeroPage)
-        0xB5 -> Move (Load, A, ByVal ZeroPageX)
-        0xAD -> Move (Load, A, ByVal Absolute)
-        0xBD -> Move (Load, A, ByVal AbsoluteX)
-        0xB9 -> Move (Load, A, ByVal AbsoluteY)
-        0xA1 -> Move (Load, A, ByVal XIndirect)
-        0xB1 -> Move (Load, A, ByVal IndirectY)
-        0xA2 -> Move (Load, X, Immediate)
-        0xA6 -> Move (Load, X, ByVal ZeroPage)
-        0xB6 -> Move (Load, X, ByVal ZeroPageY)
-        0xAE -> Move (Load, X, ByVal Absolute)
-        0xBE -> Move (Load, X, ByVal AbsoluteY)
-        0xA0 -> Move (Load, Y, Immediate)
-        0xA4 -> Move (Load, Y, ByVal ZeroPage)
-        0xB4 -> Move (Load, Y, ByVal ZeroPageY)
-        0xAC -> Move (Load, Y, ByVal Absolute)
-        0xBC -> Move (Load, Y, ByVal AbsoluteY)
-        0x85 -> Move (Store, A, ByRef ZeroPage)
-        0x95 -> Move (Store, A, ByRef ZeroPageX)
-        0x8D -> Move (Store, A, ByRef Absolute)
-        0x9D -> Move (Store, A, ByRef AbsoluteX)
-        0x99 -> Move (Store, A, ByRef AbsoluteY)
-        0x81 -> Move (Store, A, ByRef XIndirect)
-        0x91 -> Move (Store, A, ByRef IndirectY)
-        0x86 -> Move (Store, X, ByRef ZeroPage)
-        0x96 -> Move (Store, X, ByRef ZeroPageY)
-        0x8E -> Move (Store, X, ByRef Absolute)
-        0x84 -> Move (Store, Y, ByRef ZeroPage)
-        0x94 -> Move (Store, Y, ByRef ZeroPageX)
-        0x8C -> Move (Store, Y, ByRef Absolute)
-        0xAA -> Move (Transfer, A, Implied X)
-        0x8A -> Move (Transfer, X, Implied A)
-        0xA8 -> Move (Transfer, A, Implied Y)
-        0x98 -> Move (Transfer, Y, Implied A)
-        0x9A -> Move (Transfer, SP, Implied X)
-        0xBA -> Move (Transfer, X, Implied SP)
-        0x18 -> Modify (Status, Carry, Bool.false)
-        0x38 -> Modify (Status, Carry, Bool.true)
-        0x58 -> Modify (Status, InterruptDisable, Bool.false)
-        0x78 -> Modify (Status, InterruptDisable, Bool.true)
-        0xB8 -> Modify (Status, Overflow, Bool.false)
-        0xD8 -> Modify (Status, DecimalMode, Bool.false)
-        0xF8 -> Modify (Status, DecimalMode, Bool.true)
-        0x4C -> Flow (Jump, Always, ByVal Absolute) # or ByRef?
-        0x6C -> Flow (Jump, Always, Indirect) # ReadMemAddr Addr
-        0x20 -> Flow (Call, Always, ByVal Absolute)
-        0x10 -> Flow (Branch, On (Negative, Bool.false), Relative)
-        0x30 -> Flow (Branch, On (Negative, Bool.true), Relative)
-        0x50 -> Flow (Branch, On (Overflow, Bool.false), Relative)
-        0x70 -> Flow (Branch, On (Overflow, Bool.true), Relative)
-        0x90 -> Flow (Branch, On (Carry, Bool.false), Relative)
-        0xB0 -> Flow (Branch, On (Carry, Bool.true), Relative)
-        0xD0 -> Flow (Branch, On (Zero, Bool.false), Relative)
-        0xF0 -> Flow (Branch, On (Zero, Bool.true), Relative)
-        0x00 -> Misc (ForceInterrupt, Implied None)
-        0x60 -> Misc (ReturnFromSubroutine, Implied None)
-        0x40 -> Misc (ReturnFromInterrupt, Implied None)
-        0x48 -> Stack (Push, Implied A)
-        0x08 -> Stack (Push, Implied Status)
-        0x68 -> Stack (Pop, Implied A)
-        0x28 -> Stack (Pop, Implied Status)
-        _ -> Unknown
+Emulator : {
+    reg : Register,
+    ram : Memory.Type,
+}
 
 # Logical and Arithmetic Operations
 #

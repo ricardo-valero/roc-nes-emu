@@ -1,33 +1,26 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    roc = {
-      url = "github:roc-lang/roc";
-      # inputs.nixpkgs.follows = "nixpkgs";
-    };
+    roc-overlay.url = "github:roc-lang/roc-overlay";
+    roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
   outputs = {
+    self,
     nixpkgs,
-    roc,
+    roc-overlay,
     ...
   }: let
-    systems = nixpkgs.lib.systems.flakeExposed;
+    systems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
   in {
-    formatter = nixpkgs.lib.genAttrs systems (
-      system: let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in
-        pkgs.alejandra
-    );
     devShells = nixpkgs.lib.genAttrs systems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
-      rocPkgs = roc.packages.${system};
+      roc-pkgs = roc-overlay.packages.${system};
     in {
       default = pkgs.mkShell {
-        buildInputs = with pkgs; [
-          nil
-          (with rocPkgs; [full])
-        ];
+        buildInputs = builtins.attrValues {
+          inherit (pkgs) nixd;
+          inherit (roc-pkgs) nightly;
+        };
       };
     });
   };
