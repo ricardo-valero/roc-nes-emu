@@ -1,11 +1,16 @@
-# Play a NES ROM in a window. The ROM at rom/play.nes is embedded at build
-# time (seed it once with `cp check/nestest/data/nestest.nes rom/play.nes`;
-# drop any NROM game ROM there and rebuild to play it).
+# Play a NES ROM in a window. The ROM is read from disk at startup — the
+# first program argument (`./ray game.nes`), else rom/play.nes (seed it once
+# with `cp check/nestest/data/nestest.nes rom/play.nes`) — so swapping games
+# needs no rebuild.
+#
+# The platform is the local roc-ray fork checkout (../../roc-ray, branch
+# file-io), which adds the binary read_bytes!/write_bytes! effects; build its
+# host once with `zig build` there before building this app.
 #
 # Controls: arrows = d-pad, X = A, Z = B, Enter = Start, Backspace = Select,
 # Esc exits.
 app [Model, program] {
-    ray: platform "https://github.com/lukewilliamboswell/roc-ray/releases/download/0.9.0/3sKTYuHvxSV77dDyZrxuUYgfrAarL6ZtasWMPeH32udh.tar.zst",
+    ray: platform "../../roc-ray/platform/main.roc",
     nes: "../package/main.roc",
 }
 
@@ -16,7 +21,6 @@ import ray.Draw
 import ray.Host
 import nes.Nes
 import nes.Cartridge
-import "../rom/play.nes" as rom : List(U8)
 
 # Nes is boxed: passing the large nested record itself through the host's
 # model round-trip crashes in the platform's refcount walk (same platform
@@ -37,7 +41,12 @@ init! = App.init(
         .with_title("roc-nes-emu")
         .with_size({ width: 768, height: 720 })
         .with_frame_pacing(Capped(60)),
-    |_host| {
+    |host| {
+        rom_path = host.args!().get(0) ?? "rom/play.nes"
+        rom = match host.read_bytes!(rom_path) {
+            Ok(bytes) => bytes
+            Err(_) => crash("no ROM at ${rom_path} — copy a NES ROM there, or pass a path: ./ray game.nes")
+        }
         screen = Assets.Texture.generate_color!({ width: 256, height: 240, color: Color.black })?
         screen.set_filter!(Point)
         screen.set_wrap!(Clamp)
@@ -93,7 +102,7 @@ nes_palette = [
     204, 210, 120, 180, 222, 120, 168, 226, 144, 152, 226, 180, 160, 214, 228, 160, 162, 160, 0, 0, 0, 0, 0, 0,
 ]
 
-nes_color : U8 -> Color
+nes_color : U8 -> Color.Rgba
 nes_color = |idx| {
     i = idx.bitwise_and(0x3F).to_u64()
     base = i.shl_wrap(1).plus(i) # *3
