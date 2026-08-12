@@ -40,9 +40,14 @@ Nes := {
         }
     }
 
-    # advance to the next vblank entry (bounded by a step budget)
-    run_frame : Nes -> Nes
-    run_frame = |nes| {
+    no_buttons : {} -> { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool }
+    no_buttons = |_| { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False }
+
+    # advance to the next vblank entry (bounded by a step budget),
+    # with this frame's controller state applied first
+    run_frame : Nes, { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool } -> Nes
+    run_frame = |nes0, buttons| {
+        nes = { ..nes0, cpu: { ..nes0.cpu, bus: nes0.cpu.bus.set_buttons(buttons) } }
         f0 = Bus.ppu_frame(nes.cpu.bus)
         go = |n, budget| {
             if budget == 0 {
@@ -114,7 +119,7 @@ expect {
         Ok(cart) => {
             # run_frame returns at NMI dispatch, before the handler's INX runs,
             # so N frames yield N-1 completed handler executions
-            three_frames = Nes.from_cartridge(cart).run_frame().run_frame().run_frame()
+            three_frames = Nes.from_cartridge(cart).run_frame(Nes.no_buttons({})).run_frame(Nes.no_buttons({})).run_frame(Nes.no_buttons({}))
             three_frames.cpu.reg.x >= 2
         }
 

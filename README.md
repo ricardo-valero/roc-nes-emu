@@ -24,7 +24,23 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   `Nes.framebuffer` is the frontend surface. Known simplifications:
   scanline granularity (no mid-scanline raster effects), instant OAM DMA
   with a flat 513-cycle stall.
-- Next: the rocray play app.
+- **Play app**: a [roc-ray](https://github.com/lukewilliamboswell/roc-ray)
+  window running the emulator at 60fps with keyboard input through the
+  controller register ($4016).
+- Next: the APU, more mappers, the web platform.
+
+## Play
+
+The ROM at `rom/play.nes` is embedded at build time — seed it once, then
+drop any NROM game there and rebuild:
+
+```sh
+cp check/nestest/data/nestest.nes rom/play.nes
+roc app/play.roc
+```
+
+Controls: arrows = d-pad, X = A, Z = B, Enter = Start,
+Backspace = Select, Esc exits.
 
 ## Development
 

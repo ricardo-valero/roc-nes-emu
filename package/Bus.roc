@@ -8,12 +8,22 @@ import /Ppu
 #   0x0000-0x1FFF  2 KiB internal RAM, mirrored every 0x0800
 #   0x2000-0x3FFF  PPU registers, mirrored every 8 bytes (reads have effects)
 #   0x4014         OAM DMA (write): instant page copy + 513-cycle CPU stall
+#   0x4016         controller 1: strobe write, serial shift-register read
 #   0x4000-0x401F  other APU / IO - stubbed
 #   0x6000-0x7FFF  8 KiB PRG RAM (blargg test ROMs report status here)
 #   0x8000-0xFFFF  cartridge PRG (writes ignored)
 Bus := [
     Flat(List(U8)),
-    Nrom({ ram : List(U8), cart : Cartridge, prg_ram : List(U8), ppu : Ppu, dma_stall : U64 }),
+    Nrom({
+        ram : List(U8),
+        cart : Cartridge,
+        prg_ram : List(U8),
+        ppu : Ppu,
+        dma_stall : U64,
+        buttons : { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool },
+        strobe : Bool,
+        shift : U8,
+    }),
 ].{
     flat : List(U8) -> Bus
     flat = |mem| Flat(mem)
@@ -26,7 +36,30 @@ Bus := [
             prg_ram: List.repeat(0, 0x2000),
             ppu: Ppu.init(cart.header.mirroring),
             dma_stall: 0,
+            buttons: { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False },
+            strobe: Bool.False,
+            shift: 0xFF,
         })
+
+    # pack buttons into the hardware latch order: A first (bit 0) .. Right (bit 7)
+    pack_buttons = |b| {
+        bit = |on, n| if on { U8.shl_wrap(1, n) } else { 0 }
+        bit(b.a, 0)
+            .bitwise_or(bit(b.b, 1))
+            .bitwise_or(bit(b.select, 2))
+            .bitwise_or(bit(b.start, 3))
+            .bitwise_or(bit(b.up, 4))
+            .bitwise_or(bit(b.down, 5))
+            .bitwise_or(bit(b.left, 6))
+            .bitwise_or(bit(b.right, 7))
+    }
+
+    set_buttons : Bus, { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool } -> Bus
+    set_buttons = |bus, buttons|
+        match bus {
+            Flat(_) => bus
+            Nrom(n) => Nrom({ ..n, buttons: buttons })
+        }
 
     # Reads are state-returning: PPU registers have read side effects
     # (PPUSTATUS clears vblank + the write latch; PPUDATA cycles its buffer).
@@ -41,8 +74,16 @@ Bus := [
                 } else if addr < 0x4000 {
                     r = Ppu.read_reg(n.ppu, n.cart, addr.bitwise_and(0x0007))
                     { bus: Nrom({ ..n, ppu: r.ppu }), value: r.value }
+                } else if addr == 0x4016 {
+                    if n.strobe {
+                        # strobe held: live A, no shifting
+                        { bus: bus, value: pack_buttons(n.buttons).bitwise_and(0x01) }
+                    } else {
+                        bit = n.shift.bitwise_and(0x01)
+                        { bus: Nrom({ ..n, shift: n.shift.shr_zf_wrap(1).bitwise_or(0x80) }), value: bit }
+                    }
                 } else if addr < 0x6000 {
-                    { bus: bus, value: 0 } # APU/IO stubs
+                    { bus: bus, value: 0 } # APU/IO stubs ($4017: no second controller)
                 } else if addr < 0x8000 {
                     { bus: bus, value: n.prg_ram.get(addr.bitwise_and(0x1FFF).to_u64()) ?? 0 }
                 } else {
@@ -61,6 +102,13 @@ Bus := [
                     Nrom({ ..n, ppu: n.ppu.write_reg(addr.bitwise_and(0x0007), v) })
                 } else if addr == 0x4014 {
                     oam_dma(bus, v)
+                } else if addr == 0x4016 {
+                    if v.bitwise_and(0x01) != 0 {
+                        Nrom({ ..n, strobe: Bool.True })
+                    } else {
+                        # falling edge latches the current buttons
+                        Nrom({ ..n, strobe: Bool.False, shift: pack_buttons(n.buttons) })
+                    }
                 } else if addr >= 0x6000 and addr < 0x8000 {
                     Nrom({ ..n, prg_ram: n.prg_ram.set(addr.bitwise_and(0x1FFF).to_u64(), v) ?? n.prg_ram })
                 } else {
@@ -243,6 +291,49 @@ expect {
             st = dma.take_stall({})
             oam0 = st.bus.read8(0x2004).value # OAMADDR is 0 -> first byte
             oam0 == 0x11 and st.value == 513
+        }
+
+        Err(_) => Bool.False
+    }
+}
+
+# controller: serial read order A,B,Select,Start,Up,Down,Left,Right; 1s past the eighth
+expect {
+    header = [0x4E, 0x45, 0x53, 0x1A, 1, 1, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]
+    rom = header.concat(List.repeat(0xEA, 16384)).concat(List.repeat(0, 8192))
+    match Cartridge.from_bytes(rom) {
+        Ok(cart) => {
+            held = { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.True, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.True }
+            latched = Bus.from_cartridge(cart).set_buttons(held).write8(0x4016, 1).write8(0x4016, 0)
+            read_bits = |st, k| {
+                if k >= 9 {
+                    st
+                } else {
+                    r = st.bus.read8(0x4016)
+                    read_bits({ bus: r.bus, bits: st.bits.append(r.value.bitwise_and(0x01)) }, k.plus(1))
+                }
+            }
+            k0 : U64
+            k0 = 0
+            result = read_bits({ bus: latched, bits: [] }, k0)
+            result.bits == [0, 0, 0, 1, 0, 0, 0, 1, 1]
+        }
+
+        Err(_) => Bool.False
+    }
+}
+
+# strobe held high: every read reflects live A without shifting
+expect {
+    header = [0x4E, 0x45, 0x53, 0x1A, 1, 1, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]
+    rom = header.concat(List.repeat(0xEA, 16384)).concat(List.repeat(0, 8192))
+    match Cartridge.from_bytes(rom) {
+        Ok(cart) => {
+            held = { a: Bool.True, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False }
+            strobed = Bus.from_cartridge(cart).set_buttons(held).write8(0x4016, 1)
+            r1 = strobed.read8(0x4016)
+            r2 = r1.bus.read8(0x4016)
+            r1.value.bitwise_and(1) == 1 and r2.value.bitwise_and(1) == 1
         }
 
         Err(_) => Bool.False

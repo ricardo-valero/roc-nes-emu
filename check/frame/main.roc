@@ -67,7 +67,7 @@ run_frames = |n, count|
     if count == 0 {
         n
     } else {
-        run_frames(Nes.run_frame(n), count - 1)
+        run_frames(Nes.run_frame(n, Nes.no_buttons({})), count - 1)
     }
 
 # find "<key> <digest>\n" in the digests file; key = "<rom> <frames>"
