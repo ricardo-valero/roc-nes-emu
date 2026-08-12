@@ -1,4 +1,4 @@
-import /Memory
+import /Bus
 import /Cpu/Register
 import /Cpu/Instruction
 
@@ -9,23 +9,23 @@ Operand : [None, Acc, Imm(U8), At(U16), Rel(U16)]
 # Cycle accounting is accumulated in `cycles`; `jammed` models the KIL opcodes.
 Cpu := {
     reg : Register,
-    mem : Memory.Type,
+    bus : Bus,
     cycles : U64,
     jammed : Bool,
 }.{
     init : {} -> Cpu
     init = |_| {
         reg: Register.init({}),
-        mem: List.repeat(0, 0x10000),
+        bus: Bus.flat(List.repeat(0, 0x10000)),
         cycles: 0,
         jammed: Bool.False,
     }
 
     # Build a core from explicit state (verification harnesses)
-    make : Register, Memory.Type -> Cpu
-    make = |reg, mem| {
+    make : Register, Bus -> Cpu
+    make = |reg, bus| {
         reg: reg,
-        mem: mem,
+        bus: bus,
         cycles: 0,
         jammed: Bool.False,
     }
@@ -59,7 +59,7 @@ Cpu := {
 
     fetch8 : Cpu -> { cpu : Cpu, value : U8 }
     fetch8 = |cpu| {
-        v = Memory.read8(cpu.mem, cpu.reg.program_counter)
+        v = cpu.bus.read8(cpu.reg.program_counter)
         { cpu: { ..cpu, reg: cpu.reg.write16(ProgramCounter, cpu.reg.program_counter.plus_wrap(1)) }, value: v }
     }
 
@@ -72,11 +72,11 @@ Cpu := {
 
     # 16-bit read where the high byte wraps within the page (zero-page
     # pointers and the JMP ($xxFF) hardware bug)
-    read16_bug : Memory.Type, U16 -> U16
-    read16_bug = |mem, ptr| {
-        lo = Memory.read8(mem, ptr)
+    read16_bug : Bus, U16 -> U16
+    read16_bug = |bus, ptr| {
+        lo = bus.read8(ptr)
         hi_addr = ptr.bitwise_and(0xFF00).bitwise_or(ptr.plus_wrap(1).bitwise_and(0x00FF))
-        hi = Memory.read8(mem, hi_addr)
+        hi = bus.read8(hi_addr)
         hi.to_u16().shl_wrap(8).bitwise_or(lo.to_u16())
     }
 
@@ -89,7 +89,7 @@ Cpu := {
     push8 = |cpu, v| {
         addr = cpu.reg.stack_pointer.to_u16().bitwise_or(0x0100)
         { ..cpu,
-            mem: Memory.write8(cpu.mem, addr, v),
+            bus: cpu.bus.write8(addr, v),
             reg: cpu.reg.write8(StackPointer, cpu.reg.stack_pointer.minus_wrap(1)),
         }
     }
@@ -99,7 +99,7 @@ Cpu := {
         sp = cpu0.reg.stack_pointer.plus_wrap(1)
         addr = sp.to_u16().bitwise_or(0x0100)
         cpu = { ..cpu0, reg: cpu0.reg.write8(StackPointer, sp) }
-        { cpu: cpu, value: Memory.read8(cpu.mem, addr) }
+        { cpu: cpu, value: cpu.bus.read8(addr) }
     }
 
     # --- addressing-mode resolution ---
@@ -147,18 +147,18 @@ Cpu := {
 
             Indirect => {
                 f = fetch16(cpu0)
-                { cpu: f.cpu, opd: At(read16_bug(f.cpu.mem, f.value)), crossed: Bool.False }
+                { cpu: f.cpu, opd: At(read16_bug(f.cpu.bus, f.value)), crossed: Bool.False }
             }
 
             IndexedIndirect => {
                 f = fetch8(cpu0)
                 ptr = f.value.plus_wrap(f.cpu.reg.x)
-                { cpu: f.cpu, opd: At(read16_bug(f.cpu.mem, ptr.to_u16())), crossed: Bool.False }
+                { cpu: f.cpu, opd: At(read16_bug(f.cpu.bus, ptr.to_u16())), crossed: Bool.False }
             }
 
             IndirectIndexed => {
                 f = fetch8(cpu0)
-                base = read16_bug(f.cpu.mem, f.value.to_u16())
+                base = read16_bug(f.cpu.bus, f.value.to_u16())
                 addr = base.plus_wrap(f.cpu.reg.y.to_u16())
                 { cpu: f.cpu, opd: At(addr), crossed: page_crossed(base, addr) }
             }
@@ -180,7 +180,7 @@ Cpu := {
     load_val = |cpu, opd|
         match opd {
             Imm(v) => v
-            At(a) => Memory.read8(cpu.mem, a)
+            At(a) => cpu.bus.read8(a)
             Acc => cpu.reg.accumulator
             _ => 0
         }
@@ -188,7 +188,7 @@ Cpu := {
     store_val : Cpu, Operand, U8 -> Cpu
     store_val = |cpu, opd, v|
         match opd {
-            At(a) => { ..cpu, mem: Memory.write8(cpu.mem, a, v) }
+            At(a) => { ..cpu, bus: cpu.bus.write8(a, v) }
             Acc => { ..cpu, reg: cpu.reg.write8(Accumulator, v) }
             _ => cpu
         }
@@ -262,7 +262,7 @@ Cpu := {
                     } else {
                         addr
                     }
-                { ..cpu, mem: Memory.write8(cpu.mem, target, v) }
+                { ..cpu, bus: cpu.bus.write8(target, v) }
             }
 
             _ => cpu
@@ -276,13 +276,13 @@ Cpu := {
         c2 = push8(c1, pc.to_u8_wrap())
         c3 = push8(c2, pushed_p)
         c4 = with_p(c3, set_flag(c3.reg.status, 0x04, Bool.True))
-        { ..c4, reg: c4.reg.write16(ProgramCounter, Memory.read16(c4.mem, vector)) }
+        { ..c4, reg: c4.reg.write16(ProgramCounter, c4.bus.read16(vector)) }
     }
 
     reset : Cpu -> Cpu
     reset = |cpu| {
         reg0 = Register.init({})
-        { ..cpu, reg: reg0.write16(ProgramCounter, Memory.read16(cpu.mem, 0xFFFC)) }
+        { ..cpu, reg: reg0.write16(ProgramCounter, cpu.bus.read16(0xFFFC)) }
     }
 
     nmi : Cpu -> Cpu
@@ -307,7 +307,7 @@ Cpu := {
         if cpu0.jammed {
             cpu0
         } else {
-            opcode = Memory.read8(cpu0.mem, cpu0.reg.program_counter)
+            opcode = cpu0.bus.read8(cpu0.reg.program_counter)
             inst = Instruction.lookup(opcode)
             cpu1 = { ..cpu0, reg: cpu0.reg.write16(ProgramCounter, cpu0.reg.program_counter.plus_wrap(1)) }
             r = resolve(cpu1, inst.mode)
@@ -549,7 +549,7 @@ Cpu := {
 
     run_until_brk : Cpu -> Cpu
     run_until_brk = |cpu|
-        if Memory.read8(cpu.mem, cpu.reg.program_counter) == 0x00 {
+        if cpu.bus.read8(cpu.reg.program_counter) == 0x00 {
             cpu
         } else {
             run_until_brk(step(cpu))
@@ -557,7 +557,7 @@ Cpu := {
 
     boot : Cpu, List(U8) -> Cpu
     boot = |cpu0, program| {
-        cpu = { ..cpu0, mem: Memory.load(cpu0.mem, program) }
+        cpu = { ..cpu0, bus: cpu0.bus.load_flat(program) }
         run_until_brk(reset(cpu))
     }
 }
@@ -590,7 +590,7 @@ expect {
 
 expect {
     base = Cpu.init({})
-    seeded = { ..base, mem: Memory.write8(base.mem, 0x10, 0x55) }
+    seeded = { ..base, bus: base.bus.write8(0x10, 0x55) }
     cpu = seeded.boot([0xA5, 0x10, 0x00])
     cpu.reg.accumulator == 0x55
 }
@@ -599,15 +599,15 @@ expect {
 # status; RTI restores flow to after the padding byte
 expect {
     base = Cpu.init({})
-    m1 = Memory.write16(base.mem, 0xFFFC, 0x8000)
-    m2 = Memory.write16(m1, 0xFFFE, 0x9000)
-    m3 = Memory.write8(m2, 0x8000, 0x00) # BRK
-    m4 = Memory.write8(m3, 0x9000, 0x40) # RTI
-    seeded = { ..base, mem: m4 }
+    m1 = base.bus.write16(0xFFFC, 0x8000)
+    m2 = m1.write16(0xFFFE, 0x9000)
+    m3 = m2.write8(0x8000, 0x00) # BRK
+    m4 = m3.write8(0x9000, 0x40) # RTI
+    seeded = { ..base, bus: m4 }
     cpu = seeded.reset()
     in_handler = cpu.step()
     back = in_handler.step()
-    pushed_p = Memory.read8(in_handler.mem, 0x01FB)
+    pushed_p = in_handler.bus.read8(0x01FB)
     in_handler.reg.program_counter == 0x9000
     and in_handler.reg.status.bitwise_and(0x04) != 0
     and pushed_p.bitwise_and(0x30) == 0x30
@@ -618,11 +618,11 @@ expect {
 # NMI pushes status with B clear and vectors through 0xFFFA
 expect {
     base = Cpu.init({})
-    m1 = Memory.write16(base.mem, 0xFFFC, 0x8000)
-    m2 = Memory.write16(m1, 0xFFFA, 0xA000)
-    seeded = { ..base, mem: m2 }
+    m1 = base.bus.write16(0xFFFC, 0x8000)
+    m2 = m1.write16(0xFFFA, 0xA000)
+    seeded = { ..base, bus: m2 }
     cpu = seeded.reset()
     taken = cpu.nmi()
-    pushed_p = Memory.read8(taken.mem, 0x01FB)
+    pushed_p = taken.bus.read8(0x01FB)
     taken.reg.program_counter == 0xA000 and pushed_p.bitwise_and(0x10) == 0
 }

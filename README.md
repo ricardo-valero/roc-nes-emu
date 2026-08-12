@@ -12,7 +12,12 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   the NES's 6502. Verified against Tom Harte's
   [SingleStepTests](https://github.com/SingleStepTests/65x02) (~10,000
   generated cases per opcode).
-- Next: cartridge/iNES parsing + mapper 0, then the PPU.
+- **Cartridge + bus**: iNES / NES 2.0 parsing, mapper 0 (NROM), and the NES
+  CPU memory map (2 KiB RAM mirrored, stubbed PPU/APU regions, PRG at
+  0x8000+). Verified against the
+  [nestest](https://www.nesdev.org/wiki/Emulator_tests) golden log —
+  all 8,991 instructions match (PC, registers, flags, cycles).
+- Next: the PPU.
 
 ## Development
 
@@ -48,6 +53,16 @@ roc check/single-step/main.roc -- check/single-step/data/a9.json   # one opcode
 
 Each case is executed through the pure `Cpu.step` and compared field-by-field
 (registers, flags, touched memory, total cycles).
+
+The nestest check boots kevtris' test cartridge in automation mode and
+diffs every instruction against the canonical golden log (ROM from
+[nes-test-roms](https://github.com/christopherpow/nes-test-roms), log from
+the canonical qmtpro copy — both fetched, gitignored):
+
+```sh
+roc check/nestest/fetch.roc     # once
+roc check/nestest/main.roc
+```
 
 ## Inspirations
 

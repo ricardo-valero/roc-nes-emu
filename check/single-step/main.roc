@@ -8,6 +8,7 @@ import pf.Path
 import pf.Stdout
 import nes.Cpu
 import nes.Memory
+import nes.Bus
 import nes.Register
 
 # Pure-Roc runner for Tom Harte's SingleStepTests (65x02 / nes6502).
@@ -345,7 +346,7 @@ run_case = |case| {
             .write8(X, case.initial.x)
             .write8(Y, case.initial.y)
             .write8(Status, case.initial.p)
-    done = Cpu.make(reg, mem).step()
+    done = Cpu.make(reg, Bus.flat(mem)).step()
     reg_checks = [
         check_u16("pc", done.reg.program_counter, case.final.pc),
         check_u8("s", done.reg.stack_pointer, case.final.s),
@@ -355,7 +356,7 @@ run_case = |case| {
         check_u8("p", done.reg.status, case.final.p),
         check_u64("cycles", done.cycles, case.cycles),
     ]
-    ram_checks = case.final.ram.map(|e| check_u8("ram[${e.addr.to_str()}]", Memory.read8(done.mem, e.addr), e.val))
+    ram_checks = case.final.ram.map(|e| check_u8("ram[${e.addr.to_str()}]", done.bus.read8(e.addr), e.val))
     reg_checks.concat(ram_checks).fold("", |acc, s| if s == "" { acc } else if acc == "" { s } else { "${acc}; ${s}" })
 }
 
