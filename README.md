@@ -31,15 +31,12 @@ The pre-migration 2024 codebase (old Rust-compiler Roc syntax) lives on the
 ## Checks
 
 Verification harnesses are pure Roc programs under `check/` — no nix build
-steps. The CPU single-step suite needs Tom Harte's test vectors (JSON,
-gitignored — fetch once):
+steps, and no curl: even the test-data fetch is a Roc app using basic-cli's
+HTTP client. The CPU single-step suite needs Tom Harte's test vectors
+(~860 MB of JSON, gitignored — fetch once, resumes if interrupted):
 
 ```sh
-cd check/single-step/data
-for i in $(seq 0 255); do
-  f=$(printf '%02x' $i)
-  curl -sL -o "$f.json" "https://raw.githubusercontent.com/SingleStepTests/65x02/main/nes6502/v1/$f.json"
-done
+roc check/single-step/fetch.roc
 ```
 
 Then run all opcodes (or any subset):
