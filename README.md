@@ -13,11 +13,18 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   [SingleStepTests](https://github.com/SingleStepTests/65x02) (~10,000
   generated cases per opcode).
 - **Cartridge + bus**: iNES / NES 2.0 parsing, mapper 0 (NROM), and the NES
-  CPU memory map (2 KiB RAM mirrored, stubbed PPU/APU regions, PRG at
-  0x8000+). Verified against the
-  [nestest](https://www.nesdev.org/wiki/Emulator_tests) golden log —
+  CPU memory map (2 KiB RAM mirrored, live PPU registers, 8 KiB PRG RAM,
+  OAM DMA, PRG at 0x8000+). Bus reads are state-returning — PPU registers
+  have read side effects, and the model is honest about it. Verified against
+  the [nestest](https://www.nesdev.org/wiki/Emulator_tests) golden log —
   all 8,991 instructions match (PC, registers, flags, cycles).
-- Next: the PPU.
+- **PPU (2C02)**: scanline renderer — background with loopy v/t/x scrolling,
+  sprites (8×8/8×16, flips, priority, sprite-0 hit), NTSC frame timing with
+  vblank/NMI — into a 256×240 palette-index framebuffer. `Nes.run_frame` +
+  `Nes.framebuffer` is the frontend surface. Known simplifications:
+  scanline granularity (no mid-scanline raster effects), instant OAM DMA
+  with a flat 513-cycle stall.
+- Next: the rocray play app.
 
 ## Development
 
@@ -62,6 +69,23 @@ the canonical qmtpro copy — both fetched, gitignored):
 ```sh
 roc check/nestest/fetch.roc     # once
 roc check/nestest/main.roc
+```
+
+The frame check renders a ROM headlessly and holds the framebuffer to a
+frozen digest (`check/frame/digests`, frozen only after visual confirmation
+of the PPM). The first reference is nestest's title menu:
+
+```sh
+roc check/frame/main.roc -- check/nestest/data/nestest.nes 60 /tmp/frame.ppm
+```
+
+The blargg PPU suite runs the self-reporting test ROMs through their $6000
+status protocol; `check/blargg-ppu/passlist` records which ROMs gate (and
+the exclusions, with reasons):
+
+```sh
+roc check/blargg-ppu/fetch.roc  # once
+roc check/blargg-ppu/main.roc -- check/blargg-ppu/data/*.nes
 ```
 
 ## Inspirations

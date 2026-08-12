@@ -1,7 +1,9 @@
-package [Cpu, Memory, Register, Instruction, Bus, Cartridge, Header] {}
+package [Nes, Cpu, Memory, Register, Instruction, Bus, Cartridge, Header, Ppu] {}
 
+import Nes
 import Cpu
 import Memory
+import Ppu
 import Bus
 import Cartridge
 import Cartridge/Header

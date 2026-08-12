@@ -9,3 +9,4 @@ examples/**
 .direnv/
 check/single-step/data/
 check/nestest/data/
+check/blargg-ppu/data/

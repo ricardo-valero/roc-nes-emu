@@ -7,6 +7,8 @@ Operand : [None, Acc, Imm(U8), At(U16), Rel(U16)]
 
 # 2A03 execution core: fetch/decode/execute as a pure state -> state step.
 # Cycle accounting is accumulated in `cycles`; `jammed` models the KIL opcodes.
+# Bus reads are state-returning (PPU registers have read side effects), so
+# every read threads the bus through the step.
 Cpu := {
     reg : Register,
     bus : Bus,
@@ -57,10 +59,22 @@ Cpu := {
 
     # --- memory / fetch helpers ---
 
+    read8_at : Cpu, U16 -> { cpu : Cpu, value : U8 }
+    read8_at = |cpu, addr| {
+        r = cpu.bus.read8(addr)
+        { cpu: { ..cpu, bus: r.bus }, value: r.value }
+    }
+
+    read16_at : Cpu, U16 -> { cpu : Cpu, value : U16 }
+    read16_at = |cpu, addr| {
+        r = cpu.bus.read16(addr)
+        { cpu: { ..cpu, bus: r.bus }, value: r.value }
+    }
+
     fetch8 : Cpu -> { cpu : Cpu, value : U8 }
-    fetch8 = |cpu| {
-        v = cpu.bus.read8(cpu.reg.program_counter)
-        { cpu: { ..cpu, reg: cpu.reg.write16(ProgramCounter, cpu.reg.program_counter.plus_wrap(1)) }, value: v }
+    fetch8 = |cpu0| {
+        r = read8_at(cpu0, cpu0.reg.program_counter)
+        { cpu: { ..r.cpu, reg: r.cpu.reg.write16(ProgramCounter, r.cpu.reg.program_counter.plus_wrap(1)) }, value: r.value }
     }
 
     fetch16 : Cpu -> { cpu : Cpu, value : U16 }
@@ -72,12 +86,12 @@ Cpu := {
 
     # 16-bit read where the high byte wraps within the page (zero-page
     # pointers and the JMP ($xxFF) hardware bug)
-    read16_bug : Bus, U16 -> U16
-    read16_bug = |bus, ptr| {
-        lo = bus.read8(ptr)
+    read16_bug : Cpu, U16 -> { cpu : Cpu, value : U16 }
+    read16_bug = |cpu0, ptr| {
+        lo = read8_at(cpu0, ptr)
         hi_addr = ptr.bitwise_and(0xFF00).bitwise_or(ptr.plus_wrap(1).bitwise_and(0x00FF))
-        hi = bus.read8(hi_addr)
-        hi.to_u16().shl_wrap(8).bitwise_or(lo.to_u16())
+        hi = read8_at(lo.cpu, hi_addr)
+        { cpu: hi.cpu, value: hi.value.to_u16().shl_wrap(8).bitwise_or(lo.value.to_u16()) }
     }
 
     page_crossed : U16, U16 -> Bool
@@ -99,7 +113,7 @@ Cpu := {
         sp = cpu0.reg.stack_pointer.plus_wrap(1)
         addr = sp.to_u16().bitwise_or(0x0100)
         cpu = { ..cpu0, reg: cpu0.reg.write8(StackPointer, sp) }
-        { cpu: cpu, value: cpu.bus.read8(addr) }
+        read8_at(cpu, addr)
     }
 
     # --- addressing-mode resolution ---
@@ -147,20 +161,22 @@ Cpu := {
 
             Indirect => {
                 f = fetch16(cpu0)
-                { cpu: f.cpu, opd: At(read16_bug(f.cpu.bus, f.value)), crossed: Bool.False }
+                r = read16_bug(f.cpu, f.value)
+                { cpu: r.cpu, opd: At(r.value), crossed: Bool.False }
             }
 
             IndexedIndirect => {
                 f = fetch8(cpu0)
                 ptr = f.value.plus_wrap(f.cpu.reg.x)
-                { cpu: f.cpu, opd: At(read16_bug(f.cpu.bus, ptr.to_u16())), crossed: Bool.False }
+                r = read16_bug(f.cpu, ptr.to_u16())
+                { cpu: r.cpu, opd: At(r.value), crossed: Bool.False }
             }
 
             IndirectIndexed => {
                 f = fetch8(cpu0)
-                base = read16_bug(f.cpu.bus, f.value.to_u16())
-                addr = base.plus_wrap(f.cpu.reg.y.to_u16())
-                { cpu: f.cpu, opd: At(addr), crossed: page_crossed(base, addr) }
+                r = read16_bug(f.cpu, f.value.to_u16())
+                addr = r.value.plus_wrap(r.cpu.reg.y.to_u16())
+                { cpu: r.cpu, opd: At(addr), crossed: page_crossed(r.value, addr) }
             }
 
             Relative => {
@@ -176,13 +192,13 @@ Cpu := {
             }
         }
 
-    load_val : Cpu, Operand -> U8
+    load_val : Cpu, Operand -> { cpu : Cpu, value : U8 }
     load_val = |cpu, opd|
         match opd {
-            Imm(v) => v
-            At(a) => cpu.bus.read8(a)
-            Acc => cpu.reg.accumulator
-            _ => 0
+            Imm(v) => { cpu: cpu, value: v }
+            At(a) => read8_at(cpu, a)
+            Acc => { cpu: cpu, value: cpu.reg.accumulator }
+            _ => { cpu: cpu, value: 0 }
         }
 
     store_val : Cpu, Operand, U8 -> Cpu
@@ -276,13 +292,14 @@ Cpu := {
         c2 = push8(c1, pc.to_u8_wrap())
         c3 = push8(c2, pushed_p)
         c4 = with_p(c3, set_flag(c3.reg.status, 0x04, Bool.True))
-        { ..c4, reg: c4.reg.write16(ProgramCounter, c4.bus.read16(vector)) }
+        r = read16_at(c4, vector)
+        { ..r.cpu, reg: r.cpu.reg.write16(ProgramCounter, r.value) }
     }
 
     reset : Cpu -> Cpu
-    reset = |cpu| {
-        reg0 = Register.init({})
-        { ..cpu, reg: reg0.write16(ProgramCounter, cpu.bus.read16(0xFFFC)) }
+    reset = |cpu0| {
+        r = read16_at(cpu0, 0xFFFC)
+        { ..r.cpu, reg: Register.init({}).write16(ProgramCounter, r.value) }
     }
 
     nmi : Cpu -> Cpu
@@ -307,9 +324,9 @@ Cpu := {
         if cpu0.jammed {
             cpu0
         } else {
-            opcode = cpu0.bus.read8(cpu0.reg.program_counter)
-            inst = Instruction.lookup(opcode)
-            cpu1 = { ..cpu0, reg: cpu0.reg.write16(ProgramCounter, cpu0.reg.program_counter.plus_wrap(1)) }
+            f = read8_at(cpu0, cpu0.reg.program_counter)
+            inst = Instruction.lookup(f.value)
+            cpu1 = { ..f.cpu, reg: f.cpu.reg.write16(ProgramCounter, f.cpu.reg.program_counter.plus_wrap(1)) }
             r = resolve(cpu1, inst.mode)
             pen : U64
             pen = if inst.penalty and r.crossed { 1 } else { 0 }
@@ -320,9 +337,21 @@ Cpu := {
     execute = |cpu, op, opd, crossed|
         match op {
             # loads / stores / transfers
-            Lda => set8_zn(cpu, Accumulator, load_val(cpu, opd))
-            Ldx => set8_zn(cpu, X, load_val(cpu, opd))
-            Ldy => set8_zn(cpu, Y, load_val(cpu, opd))
+            Lda => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, Accumulator, r.value)
+            }
+
+            Ldx => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, X, r.value)
+            }
+
+            Ldy => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, Y, r.value)
+            }
+
             Sta => store_val(cpu, opd, cpu.reg.accumulator)
             Stx => store_val(cpu, opd, cpu.reg.x)
             Sty => store_val(cpu, opd, cpu.reg.y)
@@ -333,35 +362,87 @@ Cpu := {
             Tya => set8_zn(cpu, Accumulator, cpu.reg.y)
             Txs => { ..cpu, reg: cpu.reg.write8(StackPointer, cpu.reg.x) }
             # arithmetic / logic
-            Adc => adc_val(cpu, load_val(cpu, opd))
-            Sbc => adc_val(cpu, load_val(cpu, opd).bitwise_xor(0xFF))
-            And => set8_zn(cpu, Accumulator, cpu.reg.accumulator.bitwise_and(load_val(cpu, opd)))
-            Ora => set8_zn(cpu, Accumulator, cpu.reg.accumulator.bitwise_or(load_val(cpu, opd)))
-            Eor => set8_zn(cpu, Accumulator, cpu.reg.accumulator.bitwise_xor(load_val(cpu, opd)))
-            Cmp => compare_val(cpu, cpu.reg.accumulator, load_val(cpu, opd))
-            Cpx => compare_val(cpu, cpu.reg.x, load_val(cpu, opd))
-            Cpy => compare_val(cpu, cpu.reg.y, load_val(cpu, opd))
+            Adc => {
+                r = load_val(cpu, opd)
+                adc_val(r.cpu, r.value)
+            }
+
+            Sbc => {
+                r = load_val(cpu, opd)
+                adc_val(r.cpu, r.value.bitwise_xor(0xFF))
+            }
+
+            And => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_and(r.value))
+            }
+
+            Ora => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_or(r.value))
+            }
+
+            Eor => {
+                r = load_val(cpu, opd)
+                set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_xor(r.value))
+            }
+
+            Cmp => {
+                r = load_val(cpu, opd)
+                compare_val(r.cpu, r.cpu.reg.accumulator, r.value)
+            }
+
+            Cpx => {
+                r = load_val(cpu, opd)
+                compare_val(r.cpu, r.cpu.reg.x, r.value)
+            }
+
+            Cpy => {
+                r = load_val(cpu, opd)
+                compare_val(r.cpu, r.cpu.reg.y, r.value)
+            }
+
             Bit => {
-                m = load_val(cpu, opd)
-                z = cpu.reg.accumulator.bitwise_and(m) == 0
-                p = set_flag(set_flag(set_flag(cpu.reg.status, 0x02, z), 0x40, m.bitwise_and(0x40) != 0), 0x80, m.bitwise_and(0x80) != 0)
-                with_p(cpu, p)
+                r = load_val(cpu, opd)
+                z = r.cpu.reg.accumulator.bitwise_and(r.value) == 0
+                p = set_flag(set_flag(set_flag(r.cpu.reg.status, 0x02, z), 0x40, r.value.bitwise_and(0x40) != 0), 0x80, r.value.bitwise_and(0x80) != 0)
+                with_p(r.cpu, p)
             }
             # shifts / rotates / inc / dec
-            Asl => rmw_shift(cpu, opd, shift_left(load_val(cpu, opd), 0))
-            Lsr => rmw_shift(cpu, opd, shift_right(load_val(cpu, opd), 0))
-            Rol => rmw_shift(cpu, opd, shift_left(load_val(cpu, opd), cpu.reg.status.bitwise_and(0x01)))
-            Ror => rmw_shift(cpu, opd, shift_right(load_val(cpu, opd), cpu.reg.status.bitwise_and(0x01)))
+            Asl => {
+                r = load_val(cpu, opd)
+                rmw_shift(r.cpu, opd, shift_left(r.value, 0))
+            }
+
+            Lsr => {
+                r = load_val(cpu, opd)
+                rmw_shift(r.cpu, opd, shift_right(r.value, 0))
+            }
+
+            Rol => {
+                r = load_val(cpu, opd)
+                rmw_shift(r.cpu, opd, shift_left(r.value, r.cpu.reg.status.bitwise_and(0x01)))
+            }
+
+            Ror => {
+                r = load_val(cpu, opd)
+                rmw_shift(r.cpu, opd, shift_right(r.value, r.cpu.reg.status.bitwise_and(0x01)))
+            }
+
             Inc => {
-                v = load_val(cpu, opd).plus_wrap(1)
-                c1 = store_val(cpu, opd, v)
+                r = load_val(cpu, opd)
+                v = r.value.plus_wrap(1)
+                c1 = store_val(r.cpu, opd, v)
                 with_p(c1, set_zn(c1.reg.status, v))
             }
+
             Dec => {
-                v = load_val(cpu, opd).minus_wrap(1)
-                c1 = store_val(cpu, opd, v)
+                r = load_val(cpu, opd)
+                v = r.value.minus_wrap(1)
+                c1 = store_val(r.cpu, opd, v)
                 with_p(c1, set_zn(c1.reg.status, v))
             }
+
             Inx => set8_zn(cpu, X, cpu.reg.x.plus_wrap(1))
             Iny => set8_zn(cpu, Y, cpu.reg.y.plus_wrap(1))
             Dex => set8_zn(cpu, X, cpu.reg.x.minus_wrap(1))
@@ -435,95 +516,109 @@ Cpu := {
             Cld => with_p(cpu, set_flag(cpu.reg.status, 0x08, Bool.False))
             Sed => with_p(cpu, set_flag(cpu.reg.status, 0x08, Bool.True))
             Clv => with_p(cpu, set_flag(cpu.reg.status, 0x40, Bool.False))
-            Nop => cpu
+            Nop => {
+                r = load_val(cpu, opd) # unofficial NOPs perform their operand read
+                r.cpu
+            }
             # unofficial
             Lax => {
-                v = load_val(cpu, opd)
-                c1 = set8_zn(cpu, Accumulator, v)
-                { ..c1, reg: c1.reg.write8(X, v) }
+                r = load_val(cpu, opd)
+                c1 = set8_zn(r.cpu, Accumulator, r.value)
+                { ..c1, reg: c1.reg.write8(X, r.value) }
             }
 
             Sax => store_val(cpu, opd, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
             Dcp => {
-                v = load_val(cpu, opd).minus_wrap(1)
-                c1 = store_val(cpu, opd, v)
+                r = load_val(cpu, opd)
+                v = r.value.minus_wrap(1)
+                c1 = store_val(r.cpu, opd, v)
                 compare_val(c1, c1.reg.accumulator, v)
             }
 
             Isc => {
-                v = load_val(cpu, opd).plus_wrap(1)
-                c1 = store_val(cpu, opd, v)
+                r = load_val(cpu, opd)
+                v = r.value.plus_wrap(1)
+                c1 = store_val(r.cpu, opd, v)
                 adc_val(c1, v.bitwise_xor(0xFF))
             }
 
             Slo => {
-                s = shift_left(load_val(cpu, opd), 0)
-                c1 = store_val(cpu, opd, s.value)
+                r = load_val(cpu, opd)
+                s = shift_left(r.value, 0)
+                c1 = store_val(r.cpu, opd, s.value)
                 c2 = with_p(c1, set_flag(c1.reg.status, 0x01, s.carry))
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_or(s.value))
             }
 
             Rla => {
-                s = shift_left(load_val(cpu, opd), cpu.reg.status.bitwise_and(0x01))
-                c1 = store_val(cpu, opd, s.value)
+                r = load_val(cpu, opd)
+                s = shift_left(r.value, r.cpu.reg.status.bitwise_and(0x01))
+                c1 = store_val(r.cpu, opd, s.value)
                 c2 = with_p(c1, set_flag(c1.reg.status, 0x01, s.carry))
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_and(s.value))
             }
 
             Sre => {
-                s = shift_right(load_val(cpu, opd), 0)
-                c1 = store_val(cpu, opd, s.value)
+                r = load_val(cpu, opd)
+                s = shift_right(r.value, 0)
+                c1 = store_val(r.cpu, opd, s.value)
                 c2 = with_p(c1, set_flag(c1.reg.status, 0x01, s.carry))
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_xor(s.value))
             }
 
             Rra => {
-                s = shift_right(load_val(cpu, opd), cpu.reg.status.bitwise_and(0x01))
-                c1 = store_val(cpu, opd, s.value)
+                r = load_val(cpu, opd)
+                s = shift_right(r.value, r.cpu.reg.status.bitwise_and(0x01))
+                c1 = store_val(r.cpu, opd, s.value)
                 c2 = with_p(c1, set_flag(c1.reg.status, 0x01, s.carry))
                 adc_val(c2, s.value)
             }
 
             Anc => {
-                v = cpu.reg.accumulator.bitwise_and(load_val(cpu, opd))
-                c1 = set8_zn(cpu, Accumulator, v)
+                r = load_val(cpu, opd)
+                v = r.cpu.reg.accumulator.bitwise_and(r.value)
+                c1 = set8_zn(r.cpu, Accumulator, v)
                 with_p(c1, set_flag(c1.reg.status, 0x01, v.bitwise_and(0x80) != 0))
             }
 
             Alr => {
-                v = cpu.reg.accumulator.bitwise_and(load_val(cpu, opd))
+                r = load_val(cpu, opd)
+                v = r.cpu.reg.accumulator.bitwise_and(r.value)
                 s = shift_right(v, 0)
-                c1 = with_p(cpu, set_flag(cpu.reg.status, 0x01, s.carry))
+                c1 = with_p(r.cpu, set_flag(r.cpu.reg.status, 0x01, s.carry))
                 set8_zn(c1, Accumulator, s.value)
             }
 
             Arr => {
-                v = cpu.reg.accumulator.bitwise_and(load_val(cpu, opd))
-                r = v.shr_zf_wrap(1).bitwise_or(cpu.reg.status.bitwise_and(0x01).shl_wrap(7))
-                p1 = set_flag(cpu.reg.status, 0x01, r.bitwise_and(0x40) != 0)
+                r0 = load_val(cpu, opd)
+                v = r0.cpu.reg.accumulator.bitwise_and(r0.value)
+                r = v.shr_zf_wrap(1).bitwise_or(r0.cpu.reg.status.bitwise_and(0x01).shl_wrap(7))
+                p1 = set_flag(r0.cpu.reg.status, 0x01, r.bitwise_and(0x40) != 0)
                 v_flag = r.bitwise_and(0x40).shr_zf_wrap(6).bitwise_xor(r.bitwise_and(0x20).shr_zf_wrap(5)) != 0
                 p2 = set_zn(set_flag(p1, 0x40, v_flag), r)
-                { ..cpu, reg: cpu.reg.write8(Accumulator, r).write8(Status, p2) }
+                { ..r0.cpu, reg: r0.cpu.reg.write8(Accumulator, r).write8(Status, p2) }
             }
 
             Axs => {
-                t = cpu.reg.accumulator.bitwise_and(cpu.reg.x)
-                m = load_val(cpu, opd)
-                r = t.minus_wrap(m)
-                c1 = with_p(cpu, set_flag(set_zn(cpu.reg.status, r), 0x01, t >= m))
-                { ..c1, reg: c1.reg.write8(X, r) }
+                r = load_val(cpu, opd)
+                t = r.cpu.reg.accumulator.bitwise_and(r.cpu.reg.x)
+                res = t.minus_wrap(r.value)
+                c1 = with_p(r.cpu, set_flag(set_zn(r.cpu.reg.status, res), 0x01, t >= r.value))
+                { ..c1, reg: c1.reg.write8(X, res) }
             }
 
             Xaa => {
                 # unstable: magic constant 0xEE (calibrated against SingleStepTests)
-                v = cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(cpu.reg.x).bitwise_and(load_val(cpu, opd))
-                set8_zn(cpu, Accumulator, v)
+                r = load_val(cpu, opd)
+                v = r.cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(r.cpu.reg.x).bitwise_and(r.value)
+                set8_zn(r.cpu, Accumulator, v)
             }
 
             Lxa => {
                 # unstable: magic constant 0xEE (calibrated against SingleStepTests)
-                v = cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(load_val(cpu, opd))
-                c1 = set8_zn(cpu, Accumulator, v)
+                r = load_val(cpu, opd)
+                v = r.cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(r.value)
+                c1 = set8_zn(r.cpu, Accumulator, v)
                 { ..c1, reg: c1.reg.write8(X, v) }
             }
 
@@ -537,23 +632,26 @@ Cpu := {
             }
 
             Las => {
-                v = load_val(cpu, opd).bitwise_and(cpu.reg.stack_pointer)
-                c1 = set8_zn(cpu, Accumulator, v)
+                r = load_val(cpu, opd)
+                v = r.value.bitwise_and(r.cpu.reg.stack_pointer)
+                c1 = set8_zn(r.cpu, Accumulator, v)
                 { ..c1, reg: c1.reg.write8(X, v).write8(StackPointer, v) }
             }
 
             Kil => { ..cpu, jammed: Bool.True }
         }
 
-    # --- program helpers (used by the behavioral expects; a real bus arrives with the cartridge change) ---
+    # --- program helpers (used by the behavioral expects) ---
 
     run_until_brk : Cpu -> Cpu
-    run_until_brk = |cpu|
-        if cpu.bus.read8(cpu.reg.program_counter) == 0x00 {
-            cpu
+    run_until_brk = |cpu0| {
+        r = read8_at(cpu0, cpu0.reg.program_counter)
+        if r.value == 0x00 {
+            r.cpu
         } else {
-            run_until_brk(step(cpu))
+            run_until_brk(step(r.cpu))
         }
+    }
 
     boot : Cpu, List(U8) -> Cpu
     boot = |cpu0, program| {
@@ -607,7 +705,7 @@ expect {
     cpu = seeded.reset()
     in_handler = cpu.step()
     back = in_handler.step()
-    pushed_p = in_handler.bus.read8(0x01FB)
+    pushed_p = in_handler.bus.read8(0x01FB).value
     in_handler.reg.program_counter == 0x9000
     and in_handler.reg.status.bitwise_and(0x04) != 0
     and pushed_p.bitwise_and(0x30) == 0x30
@@ -623,6 +721,6 @@ expect {
     seeded = { ..base, bus: m2 }
     cpu = seeded.reset()
     taken = cpu.nmi()
-    pushed_p = taken.bus.read8(0x01FB)
+    pushed_p = taken.bus.read8(0x01FB).value
     taken.reg.program_counter == 0xA000 and pushed_p.bitwise_and(0x10) == 0
 }
