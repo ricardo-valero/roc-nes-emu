@@ -7,3 +7,4 @@ examples/**
 !examples/**/*.*
 
 .direnv/
+check/single-step/data/
