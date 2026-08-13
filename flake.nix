@@ -18,7 +18,7 @@
     in {
       default = pkgs.mkShell {
         buildInputs = builtins.attrValues {
-          inherit (pkgs) nixd;
+          inherit (pkgs) nixd agent-browser;
           inherit (roc-pkgs) nightly;
         };
       };
