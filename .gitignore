@@ -13,3 +13,5 @@ check/blargg-ppu/data/
 rom/
 play
 ray
+app/web/play.nes
+app/web/play.wasm

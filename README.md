@@ -50,6 +50,18 @@ roc build app/ray.roc --output=ray
 Controls: arrows = d-pad, X = A, Z = B, Enter = Start,
 Backspace = Select, Esc exits.
 
+## Play in the browser
+
+The web app runs on [roc-web](https://github.com/ricardo-valero/roc-web)
+(same platform as roc-ngb-emu's). The page fetches `play.nes` by default;
+drop any .nes file onto the page to swap games.
+
+```sh
+cp check/nestest/data/nestest.nes app/web/play.nes   # seed the default
+roc build app/web/main.roc --output=app/web/play.wasm
+python3 -m http.server -d app/web
+```
+
 ## Development
 
 The Nix devshell provides the Zig-based Roc compiler (pinned nightly via

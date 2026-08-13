@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; display: grid; place-items: center; background: #111; }
+  .roc-web-status { color: #8f8; font: 12px monospace; position: fixed; top: 8px; left: 8px; }
+  .roc-web-file { color: #888; font: 12px monospace; position: fixed; bottom: 8px; left: 8px; }
+</style>
+</head>
+<body>
+<script type="module">
+import { start } from './lib/roc-web.js';
+start('play.wasm', { rom: 'play.nes' });
+</script>
+</body>
+</html>
