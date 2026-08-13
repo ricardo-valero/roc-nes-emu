@@ -34,7 +34,7 @@ Bus := [
             ram: List.repeat(0, 0x0800),
             cart: cart,
             prg_ram: List.repeat(0, 0x2000),
-            ppu: Ppu.init(cart.header.mirroring),
+            ppu: Ppu.init(Cartridge.current_mirroring(cart)),
             dma_stall: 0,
             buttons: { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False },
             strobe: Bool.False,
@@ -99,7 +99,13 @@ Bus := [
                 if addr < 0x2000 {
                     Nrom({ ..n, ram: n.ram.set(addr.bitwise_and(0x07FF).to_u64(), v) ?? n.ram })
                 } else if addr < 0x4000 {
-                    Nrom({ ..n, ppu: n.ppu.write_reg(addr.bitwise_and(0x0007), v) })
+                    r = n.ppu.write_reg(addr.bitwise_and(0x0007), v)
+                    cart2 =
+                        match r.chr_write {
+                            ChrAt(chr_addr, chr_val) => n.cart.write_chr(chr_addr, chr_val)
+                            NoChr => n.cart
+                        }
+                    Nrom({ ..n, ppu: r.ppu, cart: cart2 })
                 } else if addr == 0x4014 {
                     oam_dma(bus, v)
                 } else if addr == 0x4016 {
@@ -111,8 +117,12 @@ Bus := [
                     }
                 } else if addr >= 0x6000 and addr < 0x8000 {
                     Nrom({ ..n, prg_ram: n.prg_ram.set(addr.bitwise_and(0x1FFF).to_u64(), v) ?? n.prg_ram })
+                } else if addr >= 0x8000 {
+                    # mapper registers (bank switching, mirroring, IRQ control)
+                    cart2 = n.cart.write_prg(addr, v)
+                    Nrom({ ..n, cart: cart2, ppu: n.ppu.set_mirroring(Cartridge.current_mirroring(cart2)) })
                 } else {
-                    bus # stubs and PRG ignore writes
+                    bus # remaining stubs ignore writes
                 }
         }
 
@@ -163,15 +173,24 @@ Bus := [
 
     # --- console-layer helpers ---
 
-    # advance the PPU by `dots`; reports whether an NMI should fire
-    tick_ppu : Bus, U64 -> { bus : Bus, value : Bool }
+    # advance the PPU by `dots`; clocks the mapper's scanline IRQ counter and
+    # reports the NMI latch and the mapper IRQ level
+    tick_ppu : Bus, U64 -> { bus : Bus, nmi : Bool, irq : Bool }
     tick_ppu = |bus, dots|
         match bus {
-            Flat(_) => { bus: bus, value: Bool.False }
+            Flat(_) => { bus: bus, nmi: Bool.False, irq: Bool.False }
             Nrom(n) => {
-                ticked = n.ppu.tick(n.cart, dots)
-                r = ticked.take_nmi()
-                { bus: Nrom({ ..n, ppu: r.ppu }), value: r.value }
+                t = n.ppu.tick(n.cart, dots)
+                r = t.ppu.take_nmi()
+                clock_all = |st, k|
+                    if k == 0 {
+                        st
+                    } else {
+                        c = st.cart.clock_scanline()
+                        clock_all({ cart: c.cart, irq: st.irq or c.irq }, k - 1)
+                    }
+                clocked = clock_all({ cart: n.cart, irq: Bool.False }, t.sl_clocks)
+                { bus: Nrom({ ..n, ppu: r.ppu, cart: clocked.cart }), nmi: r.value, irq: clocked.irq }
             }
         }
 

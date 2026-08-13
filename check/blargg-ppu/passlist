@@ -9,3 +9,7 @@ check/blargg-ppu/data/oam_read.nes
 #   09-even_odd_frames, 10-even_odd_timing - odd-frame dot skip not modeled.
 #   oam_stress - dot-level OAM access patterns during rendering.
 #   ppu_open_bus - PPU open-bus decay not modeled.
+#   mmc3-1..6 (mmc3_test_2) - all clock the IRQ counter via explicit A12
+#     toggles ($2006 writes, rendering disabled); our MMC3 clocks per rendered
+#     scanline (the approximation games like SMB3 use). Register-driven A12
+#     clocking requires dot-level modeling - revisit if a game needs it.

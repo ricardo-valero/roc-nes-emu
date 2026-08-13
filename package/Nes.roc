@@ -32,12 +32,17 @@ Nes := {
         t = c3.bus.tick_ppu(dots)
         c4 = { ..c3, bus: t.bus }
         # vblank-entry NMIs (mid-instruction in dot time) deliver now;
-        # write-latched ones from the previous instruction deliver now too
-        if nes.delayed_nmi or t.value {
-            { cpu: c4.nmi(), delayed_nmi: w.value }
-        } else {
-            { cpu: c4, delayed_nmi: w.value }
-        }
+        # write-latched ones from the previous instruction deliver now too.
+        # The mapper IRQ line is level-triggered: Cpu.irq honors the I flag,
+        # and the handler's $E000 write deasserts the line.
+        after_nmi =
+            if nes.delayed_nmi or t.nmi {
+                c4.nmi()
+            } else {
+                c4
+            }
+        final = if t.irq { after_nmi.irq() } else { after_nmi }
+        { cpu: final, delayed_nmi: w.value }
     }
 
     no_buttons : {} -> { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool }

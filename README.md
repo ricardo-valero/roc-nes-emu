@@ -12,7 +12,9 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   the NES's 6502. Verified against Tom Harte's
   [SingleStepTests](https://github.com/SingleStepTests/65x02) (~10,000
   generated cases per opcode).
-- **Cartridge + bus**: iNES / NES 2.0 parsing, mapper 0 (NROM), and the NES
+- **Cartridge + bus**: iNES / NES 2.0 parsing, mappers 0-4 (NROM, MMC1,
+  UxROM, CNROM, and MMC3 with its scanline IRQ — ~85% of the licensed
+  library), CHR RAM, mapper-controlled mirroring, and the NES
   CPU memory map (2 KiB RAM mirrored, live PPU registers, 8 KiB PRG RAM,
   OAM DMA, PRG at 0x8000+). Bus reads are state-returning — PPU registers
   have read side effects, and the model is honest about it. Verified against

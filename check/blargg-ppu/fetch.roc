@@ -32,6 +32,12 @@ files = [
     { name: "oam_read.nes", url_path: "oam_read/oam_read.nes" },
     { name: "oam_stress.nes", url_path: "oam_stress/oam_stress.nes" },
     { name: "ppu_open_bus.nes", url_path: "ppu_open_bus/ppu_open_bus.nes" },
+    { name: "mmc3-1-clocking.nes", url_path: "mmc3_test_2/rom_singles/1-clocking.nes" },
+    { name: "mmc3-2-details.nes", url_path: "mmc3_test_2/rom_singles/2-details.nes" },
+    { name: "mmc3-3-A12_clocking.nes", url_path: "mmc3_test_2/rom_singles/3-A12_clocking.nes" },
+    { name: "mmc3-4-scanline_timing.nes", url_path: "mmc3_test_2/rom_singles/4-scanline_timing.nes" },
+    { name: "mmc3-5-MMC3.nes", url_path: "mmc3_test_2/rom_singles/5-MMC3.nes" },
+    { name: "mmc3-6-MMC3_alt.nes", url_path: "mmc3_test_2/rom_singles/6-MMC3_alt.nes" },
 ]
 
 fetch_one! = |file| {

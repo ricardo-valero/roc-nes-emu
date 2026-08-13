@@ -26,7 +26,7 @@ Ppu := {
     oam : List(U8), # 256 bytes
     vram : List(U8), # 2 KiB nametables
     palette : List(U8), # 32 bytes
-    mirroring : [Horizontal, Vertical, FourScreen],
+    mirroring : [Horizontal, Vertical, FourScreen, SingleLow, SingleHigh],
     # timing
     dot : U16, # 0-340
     scanline : U16, # 0-261 (261 = pre-render)
@@ -35,7 +35,7 @@ Ppu := {
     # output
     framebuffer : List(U8), # 256*240 NES palette indices
 }.{
-    init : [Horizontal, Vertical, FourScreen] -> Ppu
+    init : [Horizontal, Vertical, FourScreen, SingleLow, SingleHigh] -> Ppu
     init = |mirroring| {
         ctrl: 0,
         mask: 0,
@@ -70,6 +70,8 @@ Ppu := {
                 Vertical => table.bitwise_and(1)
                 Horizontal => table.shr_zf_wrap(1)
                 FourScreen => table.bitwise_and(1) # unsupported; treated as vertical
+                SingleLow => 0
+                SingleHigh => 1
             }
         physical.shl_wrap(10).bitwise_or(offset).to_u64()
     }
@@ -91,7 +93,7 @@ Ppu := {
     ppu_read = |ppu, cart, addr0| {
         addr = addr0.bitwise_and(0x3FFF)
         if addr < 0x2000 {
-            cart.chr.get(addr.to_u64()) ?? 0
+            cart.read_chr(addr)
         } else if addr < 0x3F00 {
             ppu.vram.get(mirror_nt(ppu, addr)) ?? 0
         } else {
@@ -110,6 +112,9 @@ Ppu := {
             { ..ppu, palette: ppu.palette.set(pal_index(addr), value) ?? ppu.palette }
         }
     }
+
+    set_mirroring : Ppu, [Horizontal, Vertical, FourScreen, SingleLow, SingleHigh] -> Ppu
+    set_mirroring = |ppu, mirroring| { ..ppu, mirroring: mirroring }
 
     vram_increment : Ppu -> U16
     vram_increment = |ppu| if ppu.ctrl.bitwise_and(0x04) != 0 { 32 } else { 1 }
@@ -142,7 +147,9 @@ Ppu := {
             _ => { ppu: ppu, value: 0 }
         }
 
-    write_reg : Ppu, U16, U8 -> Ppu
+    # chr_write reports a PPUDATA write landing in pattern space (CHR RAM)
+    # for the bus to apply to the cartridge
+    write_reg : Ppu, U16, U8 -> { ppu : Ppu, chr_write : [NoChr, ChrAt(U16, U8)] }
     write_reg = |ppu, reg, value|
         match reg {
             0 => {
@@ -151,46 +158,50 @@ Ppu := {
                 new_t = ppu.t.bitwise_and(0xF3FF).bitwise_or(value.bitwise_and(0x03).to_u16().shl_wrap(10))
                 rising = ppu.ctrl.bitwise_and(0x80) == 0 and value.bitwise_and(0x80) != 0
                 fire = rising and ppu.status.bitwise_and(0x80) != 0
-                { ..ppu, ctrl: value, t: new_t, nmi_pending: ppu.nmi_pending or fire }
+                { ppu: { ..ppu, ctrl: value, t: new_t, nmi_pending: ppu.nmi_pending or fire }, chr_write: NoChr }
             }
 
-            1 => { ..ppu, mask: value }
-            3 => { ..ppu, oam_addr: value }
+            1 => { ppu: { ..ppu, mask: value }, chr_write: NoChr }
+            3 => { ppu: { ..ppu, oam_addr: value }, chr_write: NoChr }
             4 => {
-                { ..ppu,
+                { ppu: { ..ppu,
                     oam: ppu.oam.set(ppu.oam_addr.to_u64(), value) ?? ppu.oam,
                     oam_addr: ppu.oam_addr.plus_wrap(1),
-                }
+                }, chr_write: NoChr }
             }
 
             5 =>
                 if ppu.latch == Bool.False {
                     # first write: coarse X + fine X
                     new_t = ppu.t.bitwise_and(0xFFE0).bitwise_or(value.shr_zf_wrap(3).to_u16())
-                    { ..ppu, t: new_t, fine_x: value.bitwise_and(0x07), latch: Bool.True }
+                    { ppu: { ..ppu, t: new_t, fine_x: value.bitwise_and(0x07), latch: Bool.True }, chr_write: NoChr }
                 } else {
                     # second write: coarse Y + fine Y
                     coarse_y = value.bitwise_and(0xF8).to_u16().shl_wrap(2)
                     fine_y = value.bitwise_and(0x07).to_u16().shl_wrap(12)
-                    new_t = ppu.t.bitwise_and(0x8C1F).bitwise_or(coarse_y).bitwise_or(fine_y)
-                    { ..ppu, t: new_t, latch: Bool.False }
+                    { ppu: { ..ppu, t: ppu.t.bitwise_and(0x8C1F).bitwise_or(coarse_y).bitwise_or(fine_y), latch: Bool.False }, chr_write: NoChr }
                 }
 
             6 =>
                 if ppu.latch == Bool.False {
                     new_t = ppu.t.bitwise_and(0x00FF).bitwise_or(value.bitwise_and(0x3F).to_u16().shl_wrap(8))
-                    { ..ppu, t: new_t, latch: Bool.True }
+                    { ppu: { ..ppu, t: new_t, latch: Bool.True }, chr_write: NoChr }
                 } else {
                     new_t = ppu.t.bitwise_and(0xFF00).bitwise_or(value.to_u16())
-                    { ..ppu, t: new_t, v: new_t, latch: Bool.False }
+                    { ppu: { ..ppu, t: new_t, v: new_t, latch: Bool.False }, chr_write: NoChr }
                 }
 
             7 => {
-                written = ppu_write(ppu, ppu.v, value)
-                { ..written, v: written.v.plus_wrap(vram_increment(written)) }
+                addr = ppu.v.bitwise_and(0x3FFF)
+                advanced = { ..ppu, v: ppu.v.plus_wrap(vram_increment(ppu)) }
+                if addr < 0x2000 {
+                    { ppu: advanced, chr_write: ChrAt(addr, value) }
+                } else {
+                    { ppu: ppu_write(advanced, addr, value), chr_write: NoChr }
+                }
             }
 
-            _ => ppu
+            _ => { ppu: ppu, chr_write: NoChr }
         }
 
     rendering_enabled : Ppu -> Bool
@@ -431,15 +442,20 @@ Ppu := {
 
     # --- timing ---
 
-    # advance by `dots`, never skipping a scanline boundary
-    tick : Ppu, Cartridge, U64 -> Ppu
-    tick = |ppu0, cart, dots| {
+    # advance by `dots`, never skipping a scanline boundary; sl_clocks counts
+    # visible/pre-render scanlines completed while rendering was enabled
+    # (the scanline approximation of MMC3's A12 clocking)
+    tick : Ppu, Cartridge, U64 -> { ppu : Ppu, sl_clocks : U64 }
+    tick = |ppu0, cart, dots| tick_go(ppu0, cart, dots, 0)
+
+    tick_go : Ppu, Cartridge, U64, U64 -> { ppu : Ppu, sl_clocks : U64 }
+    tick_go = |ppu0, cart, dots, clocks| {
         if dots == 0 {
-            ppu0
+            { ppu: ppu0, sl_clocks: clocks }
         } else {
             remaining_in_line = 341 - ppu0.dot.to_u64()
             if dots < remaining_in_line {
-                { ..ppu0, dot: ppu0.dot.plus_wrap(dots.to_u16_wrap()) }
+                { ppu: { ..ppu0, dot: ppu0.dot.plus_wrap(dots.to_u16_wrap()) }, sl_clocks: clocks }
             } else {
                 # finish this scanline
                 line = ppu0.scanline
@@ -476,7 +492,13 @@ Ppu := {
                     } else {
                         advanced
                     }
-                tick(entered, cart, dots.minus(remaining_in_line))
+                clocked =
+                    if (line < 240 or line == 261) and rendering_enabled(ppu0) {
+                        clocks.plus(1)
+                    } else {
+                        clocks
+                    }
+                tick_go(entered, cart, dots.minus(remaining_in_line), clocked)
             }
         }
     }
@@ -502,8 +524,8 @@ Ppu := {
 
 # $2005/$2006 share the write latch; $2002 reads reset it
 expect {
-    p0 = Ppu.init(Vertical)
-    p1 = p0.write_reg(6, 0x23).write_reg(6, 0x45)
+    w = |p, r, v| p.write_reg(r, v).ppu
+    p1 = w(w(Ppu.init(Vertical), 6, 0x23), 6, 0x45)
     p1.v == 0x2345 and p1.latch == Bool.False
 }
 
@@ -527,9 +549,9 @@ expect {
     dummy_cart = Cartridge.from_bytes([0x4E, 0x45, 0x53, 0x1A, 1, 1].concat(List.repeat(0, 10)).concat(List.repeat(0, 24576)))
     match dummy_cart {
         Ok(cart) => {
-            p0 = Ppu.init(Vertical)
-            p1 = p0.write_reg(6, 0x20).write_reg(6, 0x05).write_reg(7, 0x99) # write $2005 = 0x99
-            p2 = p1.write_reg(6, 0x20).write_reg(6, 0x05) # point back
+            w = |p, r, v| p.write_reg(r, v).ppu
+            p1 = w(w(w(Ppu.init(Vertical), 6, 0x20), 6, 0x05), 7, 0x99) # write $2005 = 0x99
+            p2 = w(w(p1, 6, 0x20), 6, 0x05) # point back
             r1 = p2.read_reg(cart, 7) # stale buffer
             r2 = r1.ppu.read_reg(cart, 7) # real value
             r1.value == 0 and r2.value == 0x99 and r2.ppu.v == 0x2007
@@ -541,11 +563,11 @@ expect {
 
 # vertical mirroring maps $2000/$2800 together; palette $3F10 mirrors $3F00
 expect {
-    p0 = Ppu.init(Vertical)
-    p1 = p0.write_reg(6, 0x20).write_reg(6, 0x11).write_reg(7, 0x42)
+    w = |p, r, v| p.write_reg(r, v).ppu
+    p1 = w(w(w(Ppu.init(Vertical), 6, 0x20), 6, 0x11), 7, 0x42)
     idx_a = Ppu.mirror_nt(p1, 0x2011)
     idx_b = Ppu.mirror_nt(p1, 0x2811)
-    p2 = p1.write_reg(6, 0x3F).write_reg(6, 0x10).write_reg(7, 0x2A)
+    p2 = w(w(w(p1, 6, 0x3F), 6, 0x10), 7, 0x2A)
     (p1.vram.get(idx_a) ?? 0) == 0x42 and idx_a == idx_b and (p2.palette.get(0) ?? 0) == 0x2A
 }
 
@@ -554,11 +576,10 @@ expect {
     dummy_cart = Cartridge.from_bytes([0x4E, 0x45, 0x53, 0x1A, 1, 1].concat(List.repeat(0, 10)).concat(List.repeat(0, 24576)))
     match dummy_cart {
         Ok(cart) => {
-            p0 = Ppu.init(Vertical)
-            enabled = p0.write_reg(0, 0x80)
-            at_vbl = enabled.tick(cart, 82182) # 241 * 341 + 1
+            enabled = Ppu.init(Vertical).write_reg(0, 0x80).ppu
+            at_vbl = enabled.tick(cart, 82182).ppu # 241 * 341 + 1
             taken = at_vbl.take_nmi()
-            after_frame = taken.ppu.tick(cart, 7161) # 21 * 341
+            after_frame = taken.ppu.tick(cart, 7161).ppu # 21 * 341
             at_vbl.status.bitwise_and(0x80) != 0
             and taken.value == Bool.True
             and after_frame.status.bitwise_and(0x80) == 0
