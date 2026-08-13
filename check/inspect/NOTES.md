@@ -33,3 +33,17 @@ data in the captainsouthbird/smb3 disassembly.)
   this investigation down several wrong holes.
 - Wishlist (next debug change): save-states — every probe above cost
   8–14 minutes of re-simulation from power-on.
+
+## Resolution (2026-08-13)
+
+The invisible sprites were a **Roc build-backend miscompilation**
+(nightly-2026-08-07): a fold whose accumulator record carries an index
+counter, with the body reading the counter to compute a list-write
+destination, compiles to writes shifted by one (wrapped) — the counter
+increments in place before the body reads it. The interpreter is
+correct, which is why every headless probe (interpreted) rendered
+Mario while both compiled frontends (rocray native, wasm) scrambled
+OAM via `Ppu.load_oam`. Fixed by rewriting load_oam as an explicit
+recursive loop. Standalone compiler repro: ~/dev/roc-repro-fold-counter;
+in-repo bisect trail: repro.roc. Bonus: compiled builds run at ~61 fps —
+the "slow emulator" was the interpreter.

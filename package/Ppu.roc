@@ -503,14 +503,24 @@ Ppu := {
         }
     }
 
-    # DMA landing: 256 bytes written through OAMADDR, wrapping
+    # DMA landing: 256 bytes written through OAMADDR, wrapping.
+    # NOTE: written as an explicit recursive loop, not a fold with an index
+    # counter in the accumulator record - the roc nightly's build backend
+    # (2026-08-07) miscompiles that shape (the counter increments in place
+    # before the body reads it, shifting every write by one; the interpreter
+    # is correct). Minimal repro: check/inspect/repro.roc.
     load_oam : Ppu, List(U8) -> Ppu
     load_oam = |ppu, data| {
-        result = data.fold({ oam: ppu.oam, i: 0 }, |st, byte| {
-            dst = ppu.oam_addr.plus_wrap(st.i.to_u8_wrap()).to_u64()
-            { oam: st.oam.set(dst, byte) ?? st.oam, i: st.i.plus(1) }
-        })
-        { ..ppu, oam: result.oam }
+        write_all = |oam, k|
+            if k >= data.len() {
+                oam
+            } else {
+                dst = ppu.oam_addr.to_u64().plus(k).bitwise_and(0xFF)
+                write_all(oam.set(dst, data.get(k) ?? 0) ?? oam, k.plus(1))
+            }
+        z : U64
+        z = 0
+        { ..ppu, oam: write_all(ppu.oam, z) }
     }
 
     take_nmi : Ppu -> { ppu : Ppu, value : Bool }
