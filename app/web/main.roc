@@ -58,8 +58,22 @@ render! = |model, host| {
     }
     drained = ran.take_samples()
     host.blit!(rgba(drained.nes.framebuffer()))
-    host.queue_audio!(drained.samples)
+    host.queue_audio!(interleave(drained.samples))
     { console: Box.box(drained.nes), frames: model.frames + 1 }
+}
+
+# the platform's audio sink consumes interleaved stereo at 48 kHz; the NES
+# is mono, so duplicate each sample into an L/R pair
+interleave : List(F32) -> List(F32)
+interleave = |mono| {
+    var out = List.repeat(0.0.F32, 0)
+    var i = 0.U64
+    while i < mono.len() {
+        s = mono.get(i) ?? 0.0
+        out = out.append(s).append(s)
+        i = i + 1
+    }
+    out
 }
 
 hex2 : U8 -> Str

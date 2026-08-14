@@ -5,8 +5,9 @@ import /Cartridge
 # cycle; the frame sequencer is specced in APU cycles (2 CPU cycles each)
 # whose fractional boundaries land on integral CPU-cycle counts, so plain
 # CPU-cycle counting stays exact. Mixing uses the non-linear approximation
-# formulas into F32 at ~44.1 kHz (fractional accumulator); frontends drain
-# the sample buffer via take_samples.
+# formulas into mono F32 at 48 kHz - the roc-web audio sink's rate - via a
+# fractional accumulator; frontends drain the buffer with take_samples and
+# adapt the channel count to their sink (the NES is mono).
 #
 # DMC sample fetches read PRG through the Cartridge (the same pattern as
 # Ppu.tick) and report CPU stall cycles for the bus's stall accounting.
@@ -543,7 +544,7 @@ Apu := {
             ds = dmc_step(a.dmc, cart)
             a = { ..a, dmc: ds.dmc }
             stall = stall + ds.stall
-            acc = a.sample_acc.plus(44100)
+            acc = a.sample_acc.plus(48000)
             a =
                 if acc >= 1789773 {
                     # cap the buffer (~1.5 s) so a frontend that never
