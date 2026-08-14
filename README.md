@@ -59,12 +59,13 @@ drop any .nes file onto the page to swap games.
 ```sh
 cp check/nestest/data/nestest.nes app/web/play.nes   # seed the default
 roc build app/web/main.roc --output=app/web/play.wasm
-roc app/web/serve.roc         # open http://localhost:8642/
+roc app/web/serve.roc -- --port 8642 --dir app/web   # both flags optional
 ```
 
 The server is pure Roc too ([basic-webserver](https://github.com/roc-lang/basic-webserver)
-0.16.0): a declared file root under `app/web/` with host-enforced MIME
-types and path safety — no python in the loop.
+0.16.0): a declared file root with host-enforced MIME types and path
+safety — no python in the loop. `--port` defaults to 8642 and `--dir` to
+`app/web`, mirroring the `python3 -m http.server` it replaced.
 
 ## Development
 
