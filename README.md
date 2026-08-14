@@ -26,11 +26,20 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   `Nes.framebuffer` is the frontend surface. Known simplifications:
   scanline granularity (no mid-scanline raster effects), instant OAM DMA
   with a flat 513-cycle stall.
+- **APU (2A03)**: all five channels — two pulses (envelope, sweep),
+  triangle, noise, and DMC (sample fetches through the mapper, with CPU
+  stalls) — plus the frame counter with its IRQ and $4015 status/enable.
+  Mixed through the non-linear formulas into F32 at ~44.1 kHz; frontends
+  drain via `Nes.take_samples`. All eight blargg
+  [apu_test](https://github.com/christopherpow/nes-test-roms) ROMs pass,
+  including the cycle-exact timing ones — no exclusions. Audible in the
+  browser; the native app stays silent until our roc-ray fork grows PCM
+  streaming.
 - **Play app**: a [roc-ray](https://github.com/ricardo-valero/roc-ray)
   window (our fork, which adds binary file I/O) running the emulator at
   60fps with keyboard input through the controller register ($4016) and
   runtime ROM loading.
-- Next: the APU, more mappers, the web platform.
+- Next: more mappers, native audio (roc-ray fork), save states.
 
 ## Play
 
@@ -115,7 +124,10 @@ roc check/nestest/main.roc
 
 The frame check renders a ROM headlessly and holds the framebuffer to a
 frozen digest (`check/frame/digests`, frozen only after visual confirmation
-of the PPM). The first reference is nestest's title menu:
+of the PPM). It also digests each frame's drained APU samples (`samples`
+lines in the same file) — compiled and interpreted builds must agree,
+which doubles as the F32 codegen parity watch. The first reference is
+nestest's title menu:
 
 ```sh
 roc check/frame/main.roc -- check/nestest/data/nestest.nes 60 /tmp/frame.ppm
@@ -128,6 +140,14 @@ the exclusions, with reasons):
 ```sh
 roc check/blargg-ppu/fetch.roc  # once
 roc check/blargg-ppu/main.roc -- check/blargg-ppu/data/*.nes
+```
+
+The blargg APU suite works the same way; all eight apu_test ROMs gate
+(`check/blargg-apu/passlist`, no exclusions):
+
+```sh
+roc check/blargg-apu/fetch.roc  # once
+roc check/blargg-apu/main.roc -- check/blargg-apu/data/*.nes
 ```
 
 ## Inspirations

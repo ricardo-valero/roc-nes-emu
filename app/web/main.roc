@@ -56,8 +56,10 @@ render! = |model, host| {
     } else {
         {}
     }
-    host.blit!(rgba(ran.framebuffer()))
-    { console: Box.box(ran), frames: model.frames + 1 }
+    drained = ran.take_samples()
+    host.blit!(rgba(drained.nes.framebuffer()))
+    host.queue_audio!(drained.samples)
+    { console: Box.box(drained.nes), frames: model.frames + 1 }
 }
 
 hex2 : U8 -> Str
