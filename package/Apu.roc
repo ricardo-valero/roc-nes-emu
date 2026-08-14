@@ -71,6 +71,7 @@ Dmc : {
     sample_len : U16,
     current_addr : U16,
     bytes_remaining : U16,
+    buffer : [Empty, Full(U8)], # one-byte sample buffer, refilled as soon as it empties
     shift : U8,
     bits_remaining : U8,
     silence : Bool,
@@ -80,7 +81,7 @@ Dmc : {
 Frame : {
     mode5 : Bool,
     inhibit : Bool,
-    c : U64, # CPU cycles into the sequence
+    c : I64, # CPU cycles into the sequence; negative right after a $4017 write
     irq_flag : Bool,
 }
 
@@ -122,7 +123,7 @@ Apu := {
             pulse2: { ..pulse0, ones: Bool.False },
             triangle: { enabled: Bool.False, control: Bool.False, reload_value: 0, linear: 0, reload_flag: Bool.False, period: 0, timer: 0, seq: 0, length: 0 },
             noise: { enabled: Bool.False, halt: Bool.False, env: env0, short_mode: Bool.False, period: 4, timer: 0, lfsr: 1, length: 0 },
-            dmc: { enabled: Bool.False, irq_on: Bool.False, loop_flag: Bool.False, period: 428, timer: 0, level: 0, sample_addr: 0xC000, sample_len: 1, current_addr: 0xC000, bytes_remaining: 0, shift: 0, bits_remaining: 8, silence: Bool.True, irq_flag: Bool.False },
+            dmc: { enabled: Bool.False, irq_on: Bool.False, loop_flag: Bool.False, period: 428, timer: 0, level: 0, sample_addr: 0xC000, sample_len: 1, current_addr: 0xC000, bytes_remaining: 0, buffer: Empty, shift: 0, bits_remaining: 8, silence: Bool.True, irq_flag: Bool.False },
             frame: { mode5: Bool.False, inhibit: Bool.False, c: 0, irq_flag: Bool.False },
             odd: Bool.False,
             sample_acc: 0,
@@ -231,11 +232,16 @@ Apu := {
         } else if addr == 0x4015 {
             write_status(apu, v)
         } else if addr == 0x4017 {
+            # the divider reset takes effect 3 cycles after the write on even
+            # put-cycles, 4 on odd (blargg's jitter test); our APU also sees
+            # the write a few cycles before its true position (register
+            # writes land at the start of the instruction's cycle batch), so
+            # the sequence starts a little in the past
             f : Frame
             f = {
                 mode5: v.bitwise_and(0x80) != 0,
                 inhibit: v.bitwise_and(0x40) != 0,
-                c: 0,
+                c: if apu.odd { -3 } else { -2 },
                 irq_flag: if v.bitwise_and(0x40) != 0 { Bool.False } else { apu.frame.irq_flag },
             }
             a2 = { ..apu, frame: f }
@@ -359,28 +365,42 @@ Apu := {
         if c == 7457 or c == 22371 {
             clock_quarter(a)
         } else if c == 14913 {
-            clock_half(clock_quarter(a))
+            clock_quarter(a)
+        } else if c == 14914 {
+            # the half-frame clocks land one cycle after the quarter's, as
+            # observed by blargg's len_timing
+            clock_half(a)
         } else if a.frame.mode5 {
             if c == 37281 {
-                clock_half(clock_quarter(a))
-            } else if c >= 37282 {
-                { ..a, frame: { ..a.frame, c: 0 } }
+                clock_quarter(a)
+            } else if c == 37282 {
+                clock_half(a)
+            } else if c >= 37283 {
+                { ..a, frame: { ..a.frame, c: 1 } }
             } else {
                 a
             }
         } else if c == 29829 {
-            a2 = clock_half(clock_quarter(a))
-            if a2.frame.inhibit {
-                a2
-            } else {
-                { ..a2, frame: { ..a2.frame, irq_flag: Bool.True } }
-            }
-        } else if c >= 29830 {
-            { ..a, frame: { ..a.frame, c: 0 } }
+            set_frame_irq(clock_quarter(a))
+        } else if c == 29830 {
+            set_frame_irq(clock_half(a))
+        } else if c >= 29831 {
+            # the flag is raised on three consecutive cycles; the sequence
+            # period stays 29830 (cycle 29831 is cycle 1 of the next pass)
+            a2 = set_frame_irq(a)
+            { ..a2, frame: { ..a2.frame, c: 1 } }
         } else {
             a
         }
     }
+
+    set_frame_irq : Apu -> Apu
+    set_frame_irq = |apu|
+        if apu.frame.inhibit {
+            apu
+        } else {
+            { ..apu, frame: { ..apu.frame, irq_flag: Bool.True } }
+        }
 
     # --- channel timers ---
 
@@ -414,25 +434,21 @@ Apu := {
             { ..nz, timer: nz.timer - 1 }
         }
 
-    # DMC: one CPU cycle; fetches read PRG via the mapper and cost a stall
-    dmc_step : Dmc, Cartridge -> { dmc : Dmc, stall : U64 }
-    dmc_step = |d, cart|
-        if d.timer == 0 {
-            level =
-                if d.silence {
-                    d.level
-                } else if d.shift.bitwise_and(1) != 0 {
-                    if d.level <= 125 { d.level.plus(2) } else { d.level }
+    # refill the one-byte sample buffer as soon as it is empty and bytes
+    # remain: read PRG via the mapper, cost a CPU stall, and handle the
+    # sample's end (loop or IRQ) at fetch time
+    dmc_refill : Dmc, Cartridge -> { dmc : Dmc, stall : U64 }
+    dmc_refill = |d, cart|
+        match d.buffer {
+            Full(_) => { dmc: d, stall: 0 }
+            Empty =>
+                if d.bytes_remaining == 0 {
+                    { dmc: d, stall: 0 }
                 } else {
-                    if d.level >= 2 { d.level - 2 } else { d.level }
-                }
-            d1 = { ..d, timer: d.period - 1, level: level, shift: d.shift.shr_zf_wrap(1), bits_remaining: d.bits_remaining - 1 }
-            if d1.bits_remaining == 0 {
-                if d1.bytes_remaining > 0 {
-                    byte = cart.read_prg(d1.current_addr)
-                    next_addr = if d1.current_addr == 0xFFFF { 0x8000 } else { d1.current_addr.plus(1) }
-                    remaining = d1.bytes_remaining - 1
-                    d2 = { ..d1, bits_remaining: 8, silence: Bool.False, shift: byte, current_addr: next_addr, bytes_remaining: remaining }
+                    byte = cart.read_prg(d.current_addr)
+                    next_addr = if d.current_addr == 0xFFFF { 0x8000 } else { d.current_addr.plus(1) }
+                    remaining = d.bytes_remaining - 1
+                    d2 = { ..d, buffer: Full(byte), current_addr: next_addr, bytes_remaining: remaining }
                     d3 =
                         if remaining == 0 {
                             if d2.loop_flag {
@@ -446,15 +462,38 @@ Apu := {
                             d2
                         }
                     { dmc: d3, stall: 4 }
-                } else {
-                    { dmc: { ..d1, bits_remaining: 8, silence: Bool.True }, stall: 0 }
                 }
+        }
+
+    # DMC output unit: one CPU cycle
+    dmc_step : Dmc, Cartridge -> { dmc : Dmc, stall : U64 }
+    dmc_step = |d0, cart| {
+        r = dmc_refill(d0, cart)
+        d = r.dmc
+        if d.timer == 0 {
+            level =
+                if d.silence {
+                    d.level
+                } else if d.shift.bitwise_and(1) != 0 {
+                    if d.level <= 125 { d.level.plus(2) } else { d.level }
+                } else {
+                    if d.level >= 2 { d.level - 2 } else { d.level }
+                }
+            d1 = { ..d, timer: d.period - 1, level: level, shift: d.shift.shr_zf_wrap(1), bits_remaining: d.bits_remaining - 1 }
+            if d1.bits_remaining == 0 {
+                d2 =
+                    match d1.buffer {
+                        Full(b) => { ..d1, bits_remaining: 8, silence: Bool.False, shift: b, buffer: Empty }
+                        Empty => { ..d1, bits_remaining: 8, silence: Bool.True }
+                    }
+                { dmc: d2, stall: r.stall }
             } else {
-                { dmc: d1, stall: 0 }
+                { dmc: d1, stall: r.stall }
             }
         } else {
-            { dmc: { ..d, timer: d.timer - 1 }, stall: 0 }
+            { dmc: { ..d, timer: d.timer - 1 }, stall: r.stall }
         }
+    }
 
     # --- mixing ---
 

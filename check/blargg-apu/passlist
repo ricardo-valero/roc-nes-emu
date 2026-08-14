@@ -1,0 +1,13 @@
+# ROMs that gate (regressions here fail the check). All eight apu_test
+# singles pass - including the cycle-exact timing ones (jitter, len_timing,
+# irq_flag_timing), which the frame counter models via the $4017 write
+# parity delay, the three-cycle IRQ-flag window, and half-frame clocks one
+# cycle after the quarter's. No exclusions.
+check/blargg-apu/data/1-len_ctr.nes
+check/blargg-apu/data/2-len_table.nes
+check/blargg-apu/data/3-irq_flag.nes
+check/blargg-apu/data/4-jitter.nes
+check/blargg-apu/data/5-len_timing.nes
+check/blargg-apu/data/6-irq_flag_timing.nes
+check/blargg-apu/data/7-dmc_basics.nes
+check/blargg-apu/data/8-dmc_rates.nes

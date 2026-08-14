@@ -10,6 +10,7 @@ examples/**
 check/single-step/data/
 check/nestest/data/
 check/blargg-ppu/data/
+check/blargg-apu/data/
 rom/
 play
 ray
