@@ -1,7 +1,9 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    roc-overlay.url = "github:roc-lang/roc-overlay";
+    # Pinned rev = roc nightly-2026-08-10-7df8509; keep in sync with
+    # roc-web, roc-ngb-emu, and roc-ray's .roc-version.
+    roc-overlay.url = "github:roc-lang/roc-overlay/948651d6d4c10e33b519bb30ff3900eb16a3dc3a";
     roc-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
   outputs = {
