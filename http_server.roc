@@ -10,13 +10,14 @@ import pf.Cmd
 import pf.Stdout
 import http.Response
 
-# Pure-Roc static file server for the web app:
+# Pure-Roc static file server, a drop-in for `python3 -m http.server`:
 #
-#   roc app/web/serve.roc -- --port 8642 --dir app/web
+#   roc http_server.roc -- --port 8642 --dir app/web
 #
-# Both flags are optional (defaults above). Serves the directory through the
-# platform's declared file root - MIME types, caching, and path safety are
-# the host's. Replaces `python3 -m http.server` per project convention.
+# Both flags are optional; the defaults mirror python's (port 8000, serve
+# the current directory). Nothing here knows about the emulator - it serves
+# any directory through the platform's declared file root, with MIME types,
+# caching, and path safety owned by the host.
 #
 # NOTE: basic-webserver 0.16.0 exposes no argv effect, so the flags are read
 # by asking the OS for our own command line: a spawned `sh`'s parent is this
@@ -102,13 +103,13 @@ init! = || {
         Some(s) => parse_dec(s.to_utf8(), 0, 0)
         None => 0
     }
-    port = if port_raw > 0 and port_raw < 65536 { port_raw.to_u16_wrap() } else { 8642 }
+    port = if port_raw > 0 and port_raw < 65536 { port_raw.to_u16_wrap() } else { 8000 }
     dir = match flag_value(argv, "--dir") {
         Some(s) => s
-        None => "app/web"
+        None => "."
     }
     Stdout.line!("serving ${dir} at http://127.0.0.1:${port.to_str()}/") ?? {}
-    files = Server.file_root({ id: "web", path: Path.from_os_str(OsStr.from_str(dir)) })
+    files = Server.file_root({ id: "files", path: Path.from_os_str(OsStr.from_str(dir)) })
     config =
         Server.default_config
             .with_listen({ host: "127.0.0.1", port: port })
