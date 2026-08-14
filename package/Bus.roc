@@ -1,6 +1,7 @@
 import /Memory
 import /Cartridge
 import /Ppu
+import /Apu
 
 # The CPU's single read/write path.
 # Flat: 64 KiB, for state-injection harnesses (SingleStepTests) and expects.
@@ -9,7 +10,8 @@ import /Ppu
 #   0x2000-0x3FFF  PPU registers, mirrored every 8 bytes (reads have effects)
 #   0x4014         OAM DMA (write): instant page copy + 513-cycle CPU stall
 #   0x4016         controller 1: strobe write, serial shift-register read
-#   0x4000-0x401F  other APU / IO - stubbed
+#   0x4000-0x4013, 0x4015, 0x4017  live APU registers ($4015 reads ack IRQ)
+#   remaining 0x4000-0x401F  open-bus stubs
 #   0x6000-0x7FFF  8 KiB PRG RAM (blargg test ROMs report status here)
 #   0x8000-0xFFFF  cartridge PRG (writes ignored)
 Bus := [
@@ -19,6 +21,7 @@ Bus := [
         cart : Cartridge,
         prg_ram : List(U8),
         ppu : Ppu,
+        apu : Apu,
         dma_stall : U64,
         buttons : { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool },
         strobe : Bool,
@@ -35,6 +38,7 @@ Bus := [
             cart: cart,
             prg_ram: List.repeat(0, 0x2000),
             ppu: Ppu.init(Cartridge.current_mirroring(cart)),
+            apu: Apu.init({}),
             dma_stall: 0,
             buttons: { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False },
             strobe: Bool.False,
@@ -82,8 +86,11 @@ Bus := [
                         bit = n.shift.bitwise_and(0x01)
                         { bus: Nrom({ ..n, shift: n.shift.shr_zf_wrap(1).bitwise_or(0x80) }), value: bit }
                     }
+                } else if addr == 0x4015 {
+                    r = n.apu.read_status()
+                    { bus: Nrom({ ..n, apu: r.apu }), value: r.value }
                 } else if addr < 0x6000 {
-                    { bus: bus, value: 0 } # APU/IO stubs ($4017: no second controller)
+                    { bus: bus, value: 0 } # remaining stubs ($4017: no second controller)
                 } else if addr < 0x8000 {
                     { bus: bus, value: n.prg_ram.get(addr.bitwise_and(0x1FFF).to_u64()) ?? 0 }
                 } else {
@@ -115,6 +122,9 @@ Bus := [
                         # falling edge latches the current buttons
                         Nrom({ ..n, strobe: Bool.False, shift: pack_buttons(n.buttons) })
                     }
+                } else if addr >= 0x4000 and addr <= 0x4017 {
+                    # $4014/$4016 matched above; the rest is the APU
+                    Nrom({ ..n, apu: n.apu.write_reg(addr, v) })
                 } else if addr >= 0x6000 and addr < 0x8000 {
                     Nrom({ ..n, prg_ram: n.prg_ram.set(addr.bitwise_and(0x1FFF).to_u64(), v) ?? n.prg_ram })
                 } else if addr >= 0x8000 {
@@ -191,6 +201,28 @@ Bus := [
                     }
                 clocked = clock_all({ cart: n.cart, irq: Bool.False }, t.sl_clocks)
                 { bus: Nrom({ ..n, ppu: r.ppu, cart: clocked.cart }), nmi: r.value, irq: clocked.irq }
+            }
+        }
+
+    # advance the APU by CPU cycles; DMC fetch stalls fold into the DMA
+    # stall account, and the level of the frame/DMC IRQ lines is reported
+    tick_apu : Bus, U64 -> { bus : Bus, irq : Bool }
+    tick_apu = |bus, cycles|
+        match bus {
+            Flat(_) => { bus: bus, irq: Bool.False }
+            Nrom(n) => {
+                r = n.apu.tick(n.cart, cycles)
+                { bus: Nrom({ ..n, apu: r.apu, dma_stall: n.dma_stall.plus(r.stall) }), irq: r.irq }
+            }
+        }
+
+    take_samples : Bus -> { bus : Bus, samples : List(F32) }
+    take_samples = |bus|
+        match bus {
+            Flat(_) => { bus: bus, samples: [] }
+            Nrom(n) => {
+                r = n.apu.take_samples()
+                { bus: Nrom({ ..n, apu: r.apu }), samples: r.samples }
             }
         }
 

@@ -30,18 +30,20 @@ Nes := {
         elapsed = c3.cycles - before
         dots = elapsed.plus(elapsed).plus(elapsed) # 3 PPU dots per CPU cycle
         t = c3.bus.tick_ppu(dots)
-        c4 = { ..c3, bus: t.bus }
+        ta = t.bus.tick_apu(elapsed)
+        c4 = { ..c3, bus: ta.bus }
         # vblank-entry NMIs (mid-instruction in dot time) deliver now;
         # write-latched ones from the previous instruction deliver now too.
-        # The mapper IRQ line is level-triggered: Cpu.irq honors the I flag,
-        # and the handler's $E000 write deasserts the line.
+        # IRQ lines (mapper, APU frame counter, DMC) are level-triggered:
+        # Cpu.irq honors the I flag, and each source's handler access
+        # (mapper $E000 write, $4015 read) deasserts its line.
         after_nmi =
             if nes.delayed_nmi or t.nmi {
                 c4.nmi()
             } else {
                 c4
             }
-        final = if t.irq { after_nmi.irq() } else { after_nmi }
+        final = if t.irq or ta.irq { after_nmi.irq() } else { after_nmi }
         { cpu: final, delayed_nmi: w.value }
     }
 
@@ -73,6 +75,13 @@ Nes := {
 
     framebuffer : Nes -> List(U8)
     framebuffer = |nes| Bus.ppu_framebuffer(nes.cpu.bus)
+
+    # drain the APU's samples generated since the last drain (~735/frame)
+    take_samples : Nes -> { nes : Nes, samples : List(F32) }
+    take_samples = |nes| {
+        r = nes.cpu.bus.take_samples()
+        { nes: { ..nes, cpu: { ..nes.cpu, bus: r.bus } }, samples: r.samples }
+    }
 }
 
 # test cartridge: reset -> 0x8000, NMI -> 0x9000 (PRG offset 0x1000)
