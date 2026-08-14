@@ -89,11 +89,9 @@ flag_value = |tokens, name| {
 
 own_argv! : () => List(Str)
 own_argv! = || {
-    result = Cmd.new_str("sh").args_str(["-c", "ps -o args= -p $PPID"]).exec_output!()
-    match result {
-        Ok(out) => tokens_from(out.stdout_utf8.to_utf8())
-        Err(_) => []
-    }
+    out = Cmd.new_str("sh").args_str(["-c", "ps -o args= -p $PPID"]).exec_output!()
+        ?? { stdout_utf8: "", stderr_utf8_lossy: "" }
+    tokens_from(out.stdout_utf8.to_utf8())
 }
 
 init! : () => Try({ config : Server.Config, context : Context }, [Exit(I64), ..])
