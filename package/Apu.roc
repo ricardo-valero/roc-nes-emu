@@ -546,7 +546,10 @@ Apu := {
             acc = a.sample_acc.plus(44100)
             a =
                 if acc >= 1789773 {
-                    { ..a, sample_acc: acc - 1789773, samples: a.samples.append(mix(a)) }
+                    # cap the buffer (~1.5 s) so a frontend that never
+                    # drains (today's rocray app) holds steady memory
+                    kept = if a.samples.len() < 65536 { a.samples.append(mix(a)) } else { a.samples }
+                    { ..a, sample_acc: acc - 1789773, samples: kept }
                 } else {
                     { ..a, sample_acc: acc }
                 }

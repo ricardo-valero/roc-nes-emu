@@ -14,10 +14,13 @@ import nes.Cartridge
 #   roc check/frame/main.roc -- <rom> <frames> [out.ppm]
 #
 # Runs the ROM for N frames, prints the framebuffer digest (djb2 over the
-# 61,440 palette indices), optionally writes a viewable P6 PPM, and — if
-# `check/frame/digests` holds a line `<rom> <frames> <digest>` — compares
-# against the frozen digest and fails on mismatch. Digests are frozen only
-# after the PPM has been visually confirmed.
+# 61,440 palette indices) and the APU sample digest (djb2 over each frame's
+# drained samples quantized to 16 bits), optionally writes a viewable P6
+# PPM, and — if `check/frame/digests` holds lines `<rom> <frames> <digest>`
+# / `<rom> <frames> samples <digest>` — compares against the frozen values
+# and fails on mismatch. Digests are frozen only after the PPM has been
+# visually confirmed; the sample digest doubles as the compiled-versus-
+# interpreted F32 parity check (both modes must print the same value).
 
 # djb2: multiply-free ((h << 5) + h + byte), wrapping
 digest_of : List(U8) -> U64
@@ -62,12 +65,20 @@ parse_dec = |b, i, acc|
         Err(_) => acc
     }
 
-run_frames : Nes, U64 -> Nes
-run_frames = |n, count|
+# run N frames, draining the APU each frame and folding the samples
+# (quantized to 16 bits) into a running djb2
+run_frames : { nes : Nes, sdigest : U64 }, U64 -> { nes : Nes, sdigest : U64 }
+run_frames = |st, count|
     if count == 0 {
-        n
+        st
     } else {
-        run_frames(Nes.run_frame(n, Nes.no_buttons({})), count - 1)
+        stepped = Nes.run_frame(st.nes, Nes.no_buttons({}))
+        drained = stepped.take_samples()
+        h = drained.samples.fold(st.sdigest, |acc, s| {
+            q = (s * 32767.0).to_u64_wrap()
+            acc.shl_wrap(5).plus_wrap(acc).plus_wrap(q)
+        })
+        run_frames({ nes: drained.nes, sdigest: h }, count - 1)
     }
 
 # find "<key> <digest>\n" in the digests file; key = "<rom> <frames>"
@@ -105,10 +116,13 @@ main! = |args| {
             frames = parse_dec(Path.from_os_str(frames_arg).display().to_utf8(), 0, 0)
             rom_bytes = rom_path.read_bytes!()?
             cart = Cartridge.from_bytes(rom_bytes) ? |_| NotANesFile
-            done = run_frames(Nes.from_cartridge(cart), frames)
+            start = { nes: Nes.from_cartridge(cart), sdigest: 5381 }
+            result = run_frames(start, frames)
+            done = result.nes
             fb = done.framebuffer()
             digest = digest_of(fb)
             Stdout.line!("${rom_str} after ${frames.to_str()} frames: digest ${digest.to_str()}")?
+            Stdout.line!("samples digest ${result.sdigest.to_str()}")?
             # optional PPM dump (4th arg)
             written =
                 match args {
@@ -134,6 +148,17 @@ main! = |args| {
                     }
 
                 None => Stdout.line!("(no frozen digest for this rom/frames pair)")
+            }?
+            match frozen_digest(digests, "samples ${rom_str} ${frames.to_str()}") {
+                Some(expected) =>
+                    if expected == result.sdigest {
+                        Stdout.line!("sample digest matches frozen reference")
+                    } else {
+                        Stdout.line!("SAMPLE DIGEST MISMATCH: frozen ${expected.to_str()}, got ${result.sdigest.to_str()}")?
+                        Err(SampleDigestMismatch)
+                    }
+
+                None => Stdout.line!("(no frozen sample digest for this rom/frames pair)")
             }
         }
 
