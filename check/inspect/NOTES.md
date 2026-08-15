@@ -2,7 +2,16 @@
 
 Born during the SMB3 "invisible sprites" investigation (2026-08-13).
 `main.roc` runs a ROM with scripted input and dumps machine state + a
-screenshot; `tools/` holds the Python sidecars for reading game code.
+screenshot; `tools/` holds pure-Roc utilities for reading game code:
+
+```sh
+# disassemble through the core's decoder and real MMC3 banking
+roc check/inspect/tools/disasm.roc -- <rom.nes> <cpu_addr_hex> \
+    [--bank8000 N] [--bankA000 N] [--bankC000 N]
+
+# map RAM labels in the captainsouthbird/smb3 disassembly
+roc check/inspect/tools/asm_labels.roc -- <smb3.asm> [label ...]
+```
 
 ## Example: drive SMB3 into level 1-1
 
@@ -29,7 +38,7 @@ data in the captainsouthbird/smb3 disassembly.)
   Tile_Mem=$6000 (+$1B0 per screen, reads offset by +$110),
   VBlank_Tick=$10 (main-loop frame sync), Update_Select=$0100.
 - Label addresses from the disassembly MUST be computed counting
-  anonymous `.ds` gaps (see tools/asm_labels.py) — a +1/+3 drift sent
+  anonymous `.ds` gaps (see tools/asm_labels.roc) — a +1/+3 drift sent
   this investigation down several wrong holes.
 - Wishlist (next debug change): save-states — every probe above cost
   8–14 minutes of re-simulation from power-on.
