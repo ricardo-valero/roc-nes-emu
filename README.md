@@ -39,6 +39,12 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   window (our fork, which adds binary file I/O) running the emulator at
   60fps with keyboard input through the controller register ($4016) and
   runtime ROM loading.
+- **Disasm**: a pure disassembler module in the core — every listing renders
+  through the emulator's own verified decode table (all 256 opcodes) and
+  fetches bytes through the real mapper logic, so it cannot disagree with
+  the CPU. First building block of a future debugger; the pure-Roc inspect
+  CLIs under `check/inspect/tools/` (disassembler, smb3 label mapper) are
+  built on the same principle — no Python anywhere in the repo.
 - Next: more mappers, native audio (roc-ray fork), save states.
 
 ## Play
