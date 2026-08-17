@@ -8,6 +8,7 @@
 import { attachKeys } from './key-input.js';
 import { attachFileInput } from './file-input.js';
 import { createAudio } from './audio.js';
+import { createSaveStore, romKey, legacyRomKey } from './save-store.js';
 
 const BACKENDS = { 1: 'webgpu', 2: 'webgl', 3: 'canvas2d' };
 
@@ -42,6 +43,14 @@ async function run(wasmUrl, opts, status, canvas) {
   const audio = await createAudio();
   let hasAudio = false;
 
+  // Battery saves: the app pushes `.sav` bytes whenever they may have
+  // changed (per-frame pushing works but is unnecessary); flush=1 marks a
+  // "game just saved" moment (persist now). The retained copy also
+  // persists when the tab hides, covering writes the game never flushed.
+  const saves = await createSaveStore();
+  let saveKey = null;
+  let lastBattery = null;
+
   const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
   const memory = new WebAssembly.Memory({ initial: 256, maximum: 16384 });
   const decoder = new TextDecoder();
@@ -51,6 +60,14 @@ async function run(wasmUrl, opts, status, canvas) {
     js_audio_push: (p, l) => {
       hasAudio = true;
       audio.push(new Float32Array(memory.buffer, p, l));
+    },
+    js_battery_push: (p, l, flush) => {
+      lastBattery = new Uint8Array(memory.buffer, p, l).slice();
+      if (flush && saveKey) saves.save(saveKey, lastBattery);
+    },
+    // Save states persist immediately: an explicit user action, no debounce
+    js_state_push: (p, l) => {
+      if (saveKey) saves.save(`${saveKey}:state`, new Uint8Array(memory.buffer, p, l).slice());
     },
   };
   const instance = await WebAssembly.instantiate(module, { env });
@@ -76,17 +93,40 @@ async function run(wasmUrl, opts, status, canvas) {
   // Input
   const getKeys = attachKeys();
 
-  // File loading: stage bytes into the host buffer and (re)init
-  const loadBytes = (bytes) => {
+  // File loading: stage ROM and any stored battery save, then (re)init
+  const loadBytes = async (bytes) => {
     if (bytes.length > x.rom_max_len()) throw new Error('file exceeds rom_max_len');
+    saveKey = romKey(bytes);
+    let sav = await saves.load(saveKey);
+    if (!sav) {
+      // one-time migration from the pre-content-hash key
+      const old = await saves.load(legacyRomKey(bytes));
+      if (old) {
+        saves.save(saveKey, old);
+        sav = old;
+      }
+    }
+    sav = sav ?? new Uint8Array(0);
+    const state = (await saves.load(`${saveKey}:state`)) ?? new Uint8Array(0);
+    const savLen = Math.min(sav.length, x.sav_max_len());
+    const stateLen = Math.min(state.length, x.state_max_len());
     new Uint8Array(memory.buffer, x.rom_ptr(), bytes.length).set(bytes);
-    if (x.init(bytes.length) !== 0) throw new Error('init failed');
+    new Uint8Array(memory.buffer, x.sav_ptr(), savLen).set(sav.subarray(0, savLen));
+    new Uint8Array(memory.buffer, x.state_ptr(), stateLen).set(state.subarray(0, stateLen));
+    lastBattery = null;
+    if (x.init(bytes.length, savLen, stateLen) !== 0) throw new Error('init failed');
   };
   if (opts.rom) {
-    loadBytes(new Uint8Array(await (await fetch(opts.rom)).arrayBuffer()));
+    await loadBytes(new Uint8Array(await (await fetch(opts.rom)).arrayBuffer()));
   } else {
-    x.init(0);
+    x.init(0, 0, 0);
   }
+
+  // Tab hidden (switch, close attempt): persist the retained bytes — unload
+  // events alone are unreliable, so this is the backstop trigger
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && saveKey && lastBattery) saves.save(saveKey, lastBattery);
+  });
   attachFileInput(loadBytes);
 
   // Frame pacing: once the app queues audio and the context is running,
@@ -102,11 +142,11 @@ async function run(wasmUrl, opts, status, canvas) {
     let ran = 0;
     if (hasAudio && audio.running()) {
       while (audio.queuedMs() < TARGET_MS && ran < MAX_FRAMES_PER_TICK) {
-        x.render_frame(getKeys());
+        x.render_frame(getKeys(), Date.now() / 1000);
         ran += 1;
       }
     } else {
-      x.render_frame(getKeys());
+      x.render_frame(getKeys(), Date.now() / 1000);
       ran = 1;
     }
     if (ran > 0) {

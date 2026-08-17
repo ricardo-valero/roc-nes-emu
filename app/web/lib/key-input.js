@@ -5,6 +5,7 @@ const KEYMAP = {
   KeyX: 4, KeyZ: 5, Backspace: 6, Enter: 7,
   Space: 8, ShiftLeft: 9, ShiftRight: 9,
   KeyA: 10, KeyS: 11, KeyD: 12, KeyW: 13, KeyQ: 14, KeyE: 15,
+  F5: 16, F9: 17, // save/load state; preventDefault stops the F5 reload
 };
 
 export function attachKeys(target = window) {

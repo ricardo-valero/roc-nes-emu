@@ -1,12 +1,17 @@
 # Play a NES ROM in the browser on the roc-web platform.
 # ROMs load at runtime: the page fetches play.nes by default; drop any .nes
 # file onto the page (or use the picker) to swap games — no rebuild.
-# Controls: arrows = d-pad, X = A, Z = B, Enter = Start, Backspace = Select.
+# Controls: arrows = d-pad, X = A, Z = B, Enter = Start, Backspace = Select,
+# F5 = save state, F9 = load state (persisted in the browser per ROM).
+# NOTE: pre-release pairing — the battery and state contracts (load! taking
+# sav + state bytes, push_battery!, push_state!) are in the local roc-web
+# checkout; repoint at the release-bundle URL once v0.4.0 is cut and lib/
+# re-vendored.
 #
 # Build:  roc build app/web/main.roc --output=app/web/play.wasm
 # Serve:  python3 -m http.server -d app/web
 app [Model, program] {
-    web: platform "https://github.com/ricardo-valero/roc-web/releases/download/v0.3.0/4FxpZ7r4sKg5TJ7f8ZoNgWgwfNPzfhHL1Xgvz7k72xvu.tar.zst",
+    web: platform "../../../roc-web/platform/main.roc",
     nes: "../../package/main.roc",
 }
 
@@ -15,8 +20,17 @@ import web.Host
 import nes.Nes
 import nes.Bus
 import nes.Cartridge
+import nes.Snapshot
 
-Model : { console : Box(Nes), frames : U64 }
+Model : {
+    console : Box(Nes),
+    cart : Box(Cartridge), # decode target for F9 (immutable ROM data)
+    frames : U64,
+    last_sav : List(U8),
+    state : List(U8), # latest snapshot: page-stored at init, F5 after
+    f5 : Bool, # previous-frame key levels; the platform reports levels,
+    f9 : Bool, # edges are the app's job
+}
 
 program = { init, render! }
 
@@ -26,15 +40,34 @@ init = App.init(
         .with_screen({ width: 256, height: 240 })
         .with_scale(3)
         .with_renderer(Auto),
-    |rom| {
-        console =
+    # sav / state are the page's stored bytes for this cartridge (empty on
+    # a clean start); battery seeding is skipped for batteryless carts and
+    # wrong-sized data, state bytes are validated at F9 time
+    |rom, sav, state| {
+        cart =
             match Cartridge.from_bytes(rom) {
-                Ok(cart) => Nes.from_cartridge(cart)
+                Ok(c) => c
                 Err(_) => crash("not a parseable iNES file")
             }
-        { console: Box.box(console), frames: 0 }
+        fresh = Nes.from_cartridge(cart)
+        console =
+            if Snapshot.battery_backed(fresh) {
+                Snapshot.with_battery_ram(fresh, sav) ?? fresh
+            } else {
+                fresh
+            }
+        { console: Box.box(console), cart: Box.box(cart), frames: 0, last_sav: [], state, f5: Bool.False, f9: Bool.False }
     },
 )
+
+decode_err_str = |e|
+    match e {
+        BadMagic => "not a snapshot"
+        UnsupportedVersion(v) => "unsupported snapshot version ${v.to_str()}"
+        RomMismatch => "snapshot is for a different ROM"
+        Truncated => "snapshot truncated"
+        _ => "snapshot corrupt"
+    }
 
 render! : Model, Host => Model
 render! = |model, host| {
@@ -57,9 +90,77 @@ render! = |model, host| {
         {}
     }
     drained = ran.take_samples()
-    host.blit!(rgba(drained.nes.framebuffer()))
+    # F5 rising edge: snapshot the console, keep it, persist it via the page
+    f5_now = host.key_down(KeyF5)
+    f9_now = host.key_down(KeyF9)
+    after_save =
+        if f5_now and model.f5 == Bool.False {
+            match Snapshot.encode(drained.nes) {
+                Ok(bytes) => {
+                    host.push_state!(bytes)
+                    host.log!("state saved (${bytes.len().to_str()} bytes)")
+                    { nes: drained.nes, state: bytes }
+                }
+
+                Err(_) => {
+                    host.log!("state save failed")
+                    { nes: drained.nes, state: model.state }
+                }
+            }
+        } else {
+            { nes: drained.nes, state: model.state }
+        }
+    # F9 rising edge: restore the latest snapshot; a missing or rejected
+    # one leaves the running console untouched
+    restored =
+        if f9_now and model.f9 == Bool.False {
+            if after_save.state.len() == 0 {
+                host.log!("no save state for this ROM")
+                after_save.nes
+            } else {
+                match Snapshot.decode(after_save.state, Box.unbox(model.cart)) {
+                    Ok(back) => {
+                        host.log!("state loaded")
+                        back
+                    }
+
+                    Err(e) => {
+                        host.log!("state load failed: ${decode_err_str(e)}")
+                        after_save.nes
+                    }
+                }
+            }
+        } else {
+            after_save.nes
+        }
+    # Battery bytes out on a ~1 s debounced dirty check — the page retains
+    # the last push for tab-hide persistence, so per-frame pushing (a full
+    # save copy across the wasm boundary each frame) buys nothing. The GB
+    # "RAM disabled after a write" save signal has no NES equivalent (many
+    # games treat PRG RAM as scratch), so every changed push flushes.
+    # Batteryless carts push nothing at all.
+    last_sav =
+        if Snapshot.battery_backed(restored) and model.frames.bitwise_and(63) == 63 {
+            sav = Snapshot.battery_ram(restored) ?? []
+            if sav != model.last_sav {
+                host.push_battery!(sav, Bool.True)
+                sav
+            } else {
+                model.last_sav
+            }
+        } else {
+            model.last_sav
+        }
+    host.blit!(rgba(restored.framebuffer()))
     host.queue_audio!(interleave(drained.samples))
-    { console: Box.box(drained.nes), frames: model.frames + 1 }
+    { ..model,
+        console: Box.box(restored),
+        frames: model.frames + 1,
+        last_sav,
+        state: after_save.state,
+        f5: f5_now,
+        f9: f9_now,
+    }
 }
 
 # the platform's audio sink consumes interleaved stereo at 48 kHz; the NES
@@ -89,7 +190,7 @@ debug_line : Nes -> Str
 debug_line = |n|
     match n.cpu.bus {
         Nrom(bus_state) => {
-            p = bus_state.ppu
+            p = Box.unbox(bus_state.ppu)
             oam = |i| {
                 base = i.shl_wrap(2)
                 y = p.oam.get(base) ?? 0
