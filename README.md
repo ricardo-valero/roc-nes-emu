@@ -12,9 +12,11 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   the NES's 6502. Verified against Tom Harte's
   [SingleStepTests](https://github.com/SingleStepTests/65x02) (~10,000
   generated cases per opcode).
-- **Cartridge + bus**: iNES / NES 2.0 parsing, mappers 0-4 (NROM, MMC1,
-  UxROM, CNROM, and MMC3 with its scanline IRQ — ~85% of the licensed
-  library), CHR RAM, mapper-controlled mirroring, and the NES
+- **Cartridge + bus**: iNES / NES 2.0 parsing, mappers 0-4, 7, 11, and 66
+  (NROM, MMC1, UxROM, CNROM, MMC3 with its A12-clocked IRQ, AxROM,
+  ColorDreams, GxROM — ~90% of the licensed library), CHR RAM,
+  mapper-controlled mirroring with bus-conflict AND semantics on the
+  discrete boards, and the NES
   CPU memory map (2 KiB RAM mirrored, live PPU registers, 8 KiB PRG RAM,
   OAM DMA, PRG at 0x8000+). Bus reads are state-returning — PPU registers
   have read side effects, and the model is honest about it. Verified against
@@ -23,18 +25,21 @@ first *complete* purely-functional NES emulator — a pure `package/` core
 - **PPU (2C02)**: scanline renderer — background with loopy v/t/x scrolling,
   sprites (8×8/8×16, flips, priority, sprite-0 hit), NTSC frame timing with
   vblank/NMI — into a 256×240 palette-index framebuffer. `Nes.run_frame` +
-  `Nes.framebuffer` is the frontend surface. Known simplifications:
-  scanline granularity (no mid-scanline raster effects), instant OAM DMA
-  with a flat 513-cycle stall.
+  `Nes.framebuffer` is the frontend surface. Dot-accurate where the CPU
+  can observe it: exact vblank/NMI edges, A12-driven MMC3 IRQs, and
+  span-based mid-scanline rendering (`$2006` splits, hblank-anchored
+  scroll movement — Battletoads plays). Known simplification: instant
+  OAM DMA with a flat 513-cycle stall.
 - **APU (2A03)**: all five channels — two pulses (envelope, sweep),
   triangle, noise, and DMC (sample fetches through the mapper, with CPU
   stalls) — plus the frame counter with its IRQ and $4015 status/enable.
   Mixed through the non-linear formulas into F32 at ~44.1 kHz; frontends
   drain via `Nes.take_samples`. All eight blargg
   [apu_test](https://github.com/christopherpow/nes-test-roms) ROMs pass,
-  including the cycle-exact timing ones — no exclusions. Audible in the
-  browser; the native app stays silent until our roc-ray fork grows PCM
-  streaming.
+  including the cycle-exact timing ones — no exclusions. Audible in both
+  frontends: the browser through the audio-worklet glue, the native app
+  through the roc-ray fork's PCM stream (emulation paced by the audio
+  queue, wasmboy-style).
 - **Play app**: a [roc-ray](https://github.com/ricardo-valero/roc-ray)
   window (our fork, which adds binary file I/O) running the emulator at
   60fps with keyboard input through the controller register ($4016) and
@@ -43,9 +48,17 @@ first *complete* purely-functional NES emulator — a pure `package/` core
   through the emulator's own verified decode table (all 256 opcodes) and
   fetches bytes through the real mapper logic, so it cannot disagree with
   the CPU. First building block of a future debugger; the pure-Roc inspect
-  CLIs under `check/inspect/tools/` (disassembler, smb3 label mapper) are
-  built on the same principle — no Python anywhere in the repo.
-- Next: more mappers, native audio (roc-ray fork), save states.
+  CLIs under `check/inspect/tools/` (disassembler, smb3 label mapper,
+  scripted-input probe) are built on the same principle — no Python
+  anywhere in the repo.
+- **Snapshots**: the whole console as bytes and back (`Snapshot.encode` /
+  `decode`) — versioned format, FNV-1a ROM identity check, ROM data
+  excluded and regrafted at decode. Battery-backed PRG RAM rides the same
+  module as raw version-free `.sav` bytes. Save states in both frontends;
+  a pure value tree makes the encoder a plain walk, no mutable-state
+  archaeology.
+- Next: the dot-accurate PPU, then more mappers — see [ROADMAP.md](ROADMAP.md)
+  for the full ordering and what's deliberately deferred.
 
 ## Play
 
@@ -63,13 +76,21 @@ roc build app/ray.roc --output=ray
 ```
 
 Controls: arrows = d-pad, X = A, Z = B, Enter = Start,
-Backspace = Select, Esc exits.
+Backspace = Select, F5 = save state (`<rom>.state`), F9 = load state,
+Esc exits. Battery cartridges persist PRG RAM to `<rom>.sav`
+automatically (seeded at startup, written on a ~1 s debounced dirty
+check).
 
 ## Play in the browser
 
 The web app runs on [roc-web](https://github.com/ricardo-valero/roc-web)
-(same platform as roc-ngb-emu's). The page fetches `play.nes` by default;
-drop any .nes file onto the page to swap games.
+(same platform as roc-ngb-emu's; currently the local `../roc-web` checkout
+for the pre-release battery contract — repoint at the bundle URL once
+v0.4.0 is cut). The page fetches `play.nes` by default; drop any .nes
+file onto the page to swap games. Battery cartridges persist their saves
+in the browser (IndexedDB, keyed by ROM content hash): seeded when the
+ROM loads, flushed on change and on tab-hide. F5 saves a state, F9 loads
+it — one slot per ROM, surviving page reloads.
 
 ```sh
 cp check/nestest/data/nestest.nes app/web/play.nes   # seed the default
@@ -154,6 +175,19 @@ The blargg APU suite works the same way; all eight apu_test ROMs gate
 ```sh
 roc check/blargg-apu/fetch.roc  # once
 roc check/blargg-apu/main.roc -- check/blargg-apu/data/*.nes
+```
+
+The snapshot check encodes a live console mid-frame (mid-scanline in dot
+time), decodes it against a freshly parsed cartridge, and steps original
+and restored in lockstep — CPU state, framebuffer, and drained APU samples
+must stay bit-identical every frame. Error paths (wrong ROM, unsupported
+version, truncation, battery sizing) and the battery extract/inject
+round-trip run against in-code synthetic cartridges. Reference runs cover
+an MMC3 ROM (scanline IRQ state) and nestest:
+
+```sh
+roc check/snapshot/main.roc -- check/blargg-ppu/data/mmc3-5-MMC3.nes
+roc check/snapshot/main.roc -- check/nestest/data/nestest.nes
 ```
 
 ## Inspirations
