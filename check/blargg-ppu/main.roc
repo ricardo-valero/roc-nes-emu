@@ -55,7 +55,7 @@ run_rom = |n, budget, did_reset| {
                 } else {
                     # "press reset": run a little longer, then reset the CPU
                     settled = chunk(stepped, 10000)
-                    resetted = { cpu: settled.cpu.reset() }
+                    resetted = { ..settled, cpu: settled.cpu.reset() }
                     run_rom(resetted, budget - 1, Bool.True)
                 }
             } else {

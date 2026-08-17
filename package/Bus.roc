@@ -20,8 +20,18 @@ Bus := [
         ram : List(U8),
         cart : Cartridge,
         prg_ram : List(U8),
-        ppu : Ppu,
-        apu : Apu,
+        # ppu/apu boxed: together ~500 bytes and 5 refcounted lists that
+        # would otherwise ride along in every payload copy; the PPU is only
+        # materialized at events and register access (lazy catch-up), the
+        # APU once per instruction
+        ppu : Box(Ppu),
+        apu : Box(Apu),
+        # mirrors of PPU state the per-instruction fast path needs without
+        # unboxing; refreshed by put_ppu whenever the PPU is reboxed
+        ppu_clock : U64, # the PPU's synced position (absolute dots)
+        ppu_next_event : U64, # next clock the console must materialize at
+        ppu_pending_nmi : Bool, # a write latched an NMI this instruction
+        frame_count : U64, # Ppu.frame (run_frame polls this every step)
         dma_stall : U64,
         buttons : { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool },
         strobe : Bool,
@@ -32,18 +42,70 @@ Bus := [
     flat = |mem| Flat(mem)
 
     from_cartridge : Cartridge -> Bus
-    from_cartridge = |cart|
-        Nrom({
-            ram: List.repeat(0, 0x0800),
-            cart: cart,
-            prg_ram: List.repeat(0, 0x2000),
-            ppu: Ppu.init(Cartridge.current_mirroring(cart)),
-            apu: Apu.init({}),
-            dma_stall: 0,
-            buttons: { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False },
-            strobe: Bool.False,
-            shift: 0xFF,
-        })
+    from_cartridge = |cart| {
+        p = Ppu.init(Cartridge.current_mirroring(cart))
+        Nrom(
+            put_ppu(
+                {
+                    ram: List.repeat(0, 0x0800),
+                    cart: cart,
+                    prg_ram: List.repeat(0, 0x2000),
+                    ppu: Box.box(p),
+                    apu: Box.box(Apu.init({})),
+                    ppu_clock: 0,
+                    ppu_next_event: 0,
+                    ppu_pending_nmi: Bool.False,
+                    frame_count: 0,
+                    dma_stall: 0,
+                    buttons: { a: Bool.False, b: Bool.False, select: Bool.False, start: Bool.False, up: Bool.False, down: Bool.False, left: Bool.False, right: Bool.False },
+                    strobe: Bool.False,
+                    shift: 0xFF,
+                },
+                p,
+            ),
+        )
+    }
+
+    # rebox the PPU and refresh the payload's mirror scalars
+    put_ppu = |n, p| {
+        mapper_clocks = is_mmc3(n.cart)
+        { ..n,
+            ppu: Box.box(p),
+            ppu_clock: p.clock,
+            ppu_next_event: Ppu.next_event_after(p, mapper_clocks),
+            ppu_pending_nmi: p.nmi_pending,
+            frame_count: p.frame,
+        }
+    }
+
+    is_mmc3 = |cart|
+        match cart.mapper {
+            Mmc3(_) => Bool.True
+            _ => Bool.False
+        }
+
+    # apply rendering-synthesized A12 pulses to the mapper, in clock order
+    apply_pulses = |cart0, pulses|
+        pulses.fold(cart0, |cart, p| cart.a12_rise(p.at).a12_fall(p.fall))
+
+    # apply a register-driven A12 level report at the access's clock
+    apply_reg_a12 = |cart, report, at_clock|
+        match report {
+            A12(level) => if level { cart.a12_rise(at_clock) } else { cart.a12_fall(at_clock) }
+            KeepA12 => cart
+        }
+
+    # catch the boxed PPU up to `target` (skipped when already there),
+    # feeding the mapper any A12 rises stamped on the way
+    sync_ppu = |n, target| {
+        p0 = Box.unbox(n.ppu)
+        if target <= p0.clock {
+            { n: n, ppu: p0 }
+        } else {
+            c = Ppu.catch_up(p0, n.cart, target, is_mmc3(n.cart))
+            { n: { ..n, cart: apply_pulses(n.cart, c.a12).set_chr_latches(c.latches) }, ppu: c.ppu }
+        }
+    }
 
     # pack buttons into the hardware latch order: A first (bit 0) .. Right (bit 7)
     pack_buttons = |b| {
@@ -67,17 +129,27 @@ Bus := [
 
     # Reads are state-returning: PPU registers have read side effects
     # (PPUSTATUS clears vblank + the write latch; PPUDATA cycles its buffer).
-    # Side-effect-free regions return the bus unchanged.
+    # Side-effect-free regions return the bus unchanged. `at_dot` is the
+    # absolute dot of the access (the CPU's cycle-within-instruction
+    # convention); PPU-register accesses catch the PPU up to it first.
+    # Pass 0 (read8/write8) for dot-agnostic harness access - never syncs.
     read8 : Bus, U16 -> { bus : Bus, value : U8 }
-    read8 = |bus, addr|
+    read8 = |bus, addr| read8d(bus, addr, 0)
+
+    read8d : Bus, U16, U64 -> { bus : Bus, value : U8 }
+    read8d = |bus, addr, at_dot|
         match bus {
             Flat(mem) => { bus: bus, value: Memory.read8(mem, addr) }
             Nrom(n) =>
                 if addr < 0x2000 {
                     { bus: bus, value: n.ram.get(addr.bitwise_and(0x07FF).to_u64()) ?? 0 }
                 } else if addr < 0x4000 {
-                    r = Ppu.read_reg(n.ppu, n.cart, addr.bitwise_and(0x0007))
-                    { bus: Nrom({ ..n, ppu: r.ppu }), value: r.value }
+                    s = sync_ppu(n, at_dot)
+                    f = Ppu.flush_to_access(s.ppu, s.n.cart)
+                    cart_f = s.n.cart.set_chr_latches(f.latches)
+                    r = Ppu.read_reg(f.ppu, cart_f, addr.bitwise_and(0x0007))
+                    n2 = { ..s.n, cart: apply_reg_a12(cart_f.set_chr_latches(r.latches), r.a12, r.ppu.clock) }
+                    { bus: Nrom(put_ppu(n2, r.ppu)), value: r.value }
                 } else if addr == 0x4016 {
                     if n.strobe {
                         # strobe held: live A, no shifting
@@ -87,8 +159,8 @@ Bus := [
                         { bus: Nrom({ ..n, shift: n.shift.shr_zf_wrap(1).bitwise_or(0x80) }), value: bit }
                     }
                 } else if addr == 0x4015 {
-                    r = n.apu.read_status()
-                    { bus: Nrom({ ..n, apu: r.apu }), value: r.value }
+                    r = Box.unbox(n.apu).read_status()
+                    { bus: Nrom({ ..n, apu: Box.box(r.apu) }), value: r.value }
                 } else if addr < 0x6000 {
                     { bus: bus, value: 0 } # remaining stubs ($4017: no second controller)
                 } else if addr < 0x8000 {
@@ -99,20 +171,27 @@ Bus := [
         }
 
     write8 : Bus, U16, U8 -> Bus
-    write8 = |bus, addr, v|
+    write8 = |bus, addr, v| write8d(bus, addr, v, 0)
+
+    write8d : Bus, U16, U8, U64 -> Bus
+    write8d = |bus, addr, v, at_dot|
         match bus {
             Flat(mem) => Flat(Memory.write8(mem, addr, v))
             Nrom(n) =>
                 if addr < 0x2000 {
                     Nrom({ ..n, ram: n.ram.set(addr.bitwise_and(0x07FF).to_u64(), v) ?? n.ram })
                 } else if addr < 0x4000 {
-                    r = n.ppu.write_reg(addr.bitwise_and(0x0007), v)
+                    s = sync_ppu(n, at_dot)
+                    f = Ppu.flush_to_access(s.ppu, s.n.cart)
+                    cart_f = s.n.cart.set_chr_latches(f.latches)
+                    r = f.ppu.write_reg(addr.bitwise_and(0x0007), v)
                     cart2 =
                         match r.chr_write {
-                            ChrAt(chr_addr, chr_val) => n.cart.write_chr(chr_addr, chr_val)
-                            NoChr => n.cart
+                            ChrAt(chr_addr, chr_val) => cart_f.write_chr(chr_addr, chr_val)
+                            NoChr => cart_f
                         }
-                    Nrom({ ..n, ppu: r.ppu, cart: cart2 })
+                    cart3 = apply_reg_a12(cart2, r.a12, r.ppu.clock)
+                    Nrom(put_ppu({ ..s.n, cart: cart3 }, r.ppu))
                 } else if addr == 0x4014 {
                     oam_dma(bus, v)
                 } else if addr == 0x4016 {
@@ -124,13 +203,13 @@ Bus := [
                     }
                 } else if addr >= 0x4000 and addr <= 0x4017 {
                     # $4014/$4016 matched above; the rest is the APU
-                    Nrom({ ..n, apu: n.apu.write_reg(addr, v) })
+                    Nrom({ ..n, apu: Box.box(Box.unbox(n.apu).write_reg(addr, v)) })
                 } else if addr >= 0x6000 and addr < 0x8000 {
                     Nrom({ ..n, prg_ram: n.prg_ram.set(addr.bitwise_and(0x1FFF).to_u64(), v) ?? n.prg_ram })
                 } else if addr >= 0x8000 {
                     # mapper registers (bank switching, mirroring, IRQ control)
                     cart2 = n.cart.write_prg(addr, v)
-                    Nrom({ ..n, cart: cart2, ppu: n.ppu.set_mirroring(Cartridge.current_mirroring(cart2)) })
+                    Nrom(put_ppu({ ..n, cart: cart2 }, Box.unbox(n.ppu).set_mirroring(Cartridge.current_mirroring(cart2))))
                 } else {
                     bus # remaining stubs ignore writes
                 }
@@ -153,7 +232,7 @@ Bus := [
         start = { bus: bus0, data: [] }
         result = copy(start, 0)
         match result.bus {
-            Nrom(n) => Nrom({ ..n, ppu: n.ppu.load_oam(result.data), dma_stall: n.dma_stall.plus(513) })
+            Nrom(n) => Nrom(put_ppu({ ..n, dma_stall: n.dma_stall.plus(513) }, Box.unbox(n.ppu).load_oam(result.data)))
             other => other
         }
     }
@@ -183,24 +262,67 @@ Bus := [
 
     # --- console-layer helpers ---
 
-    # advance the PPU by `dots`; clocks the mapper's scanline IRQ counter and
-    # reports the NMI latch and the mapper IRQ level
+    # Everything the console needs after one CPU instruction, in one bus
+    # rebuild: consume the pending DMA/DMC stall, tick the APU, and handle
+    # the PPU lazily - the fast path (no event crossed, nothing latched)
+    # never unboxes it; the slow path consumes write-latched NMIs, catches
+    # up to the instruction's end dot, clocks the mapper for completed
+    # scanlines, and picks up the vblank-entry NMI. `cycles_now` is the
+    # CPU's post-instruction cycle count (pre-stall); the mapper IRQ line
+    # is level-read from mapper state so mid-instruction syncs cannot lose
+    # an assertion.
+    after_step : Bus, U64, U64 -> { bus : Bus, stall : U64, latched_nmi : Bool, entry_nmi : Bool, irq : Bool }
+    after_step = |bus, step_cycles, cycles_now|
+        match bus {
+            Flat(_) => { bus: bus, stall: 0, latched_nmi: Bool.False, entry_nmi: Bool.False, irq: Bool.False }
+            Nrom(n) => {
+                stall = n.dma_stall
+                elapsed = step_cycles.plus(stall)
+                target = cycles_now.plus(stall) * 3
+                ar = Box.unbox(n.apu).tick(n.cart, elapsed)
+                if target < n.ppu_next_event and n.ppu_pending_nmi == Bool.False {
+                    {
+                        bus: Nrom({ ..n, apu: Box.box(ar.apu), dma_stall: ar.stall }),
+                        stall,
+                        latched_nmi: Bool.False,
+                        entry_nmi: Bool.False,
+                        irq: Cartridge.irq_line(n.cart) or ar.irq,
+                    }
+                } else {
+                    w = Box.unbox(n.ppu).take_nmi()
+                    c = Ppu.catch_up(w.ppu, n.cart, target, is_mmc3(n.cart))
+                    cart2 = apply_pulses(n.cart, c.a12).set_chr_latches(c.latches)
+                    r = c.ppu.take_nmi()
+                    # the CPU polls interrupts on the second-to-last cycle:
+                    # a vblank edge landing in the instruction's final
+                    # cycles is taken one instruction late (blargg
+                    # 05-nmi_timing pins the margin)
+                    poll_dot = cycles_now.plus(stall).minus(1) * 3 - 1
+                    prompt = r.value and c.ppu.vbl_set_clock <= poll_dot
+                    late = r.value and c.ppu.vbl_set_clock > poll_dot
+                    n2 = put_ppu({ ..n, cart: cart2 }, r.ppu)
+                    {
+                        bus: Nrom({ ..n2, apu: Box.box(ar.apu), dma_stall: ar.stall }),
+                        stall,
+                        latched_nmi: w.value or late,
+                        entry_nmi: prompt,
+                        irq: Cartridge.irq_line(cart2) or ar.irq,
+                    }
+                }
+            }
+        }
+
+    # advance the PPU by `dots` (harness helper); clocks the mapper's
+    # scanline IRQ counter and reports the NMI latch and the IRQ level
     tick_ppu : Bus, U64 -> { bus : Bus, nmi : Bool, irq : Bool }
     tick_ppu = |bus, dots|
         match bus {
             Flat(_) => { bus: bus, nmi: Bool.False, irq: Bool.False }
             Nrom(n) => {
-                t = n.ppu.tick(n.cart, dots)
+                t = Box.unbox(n.ppu).tick(n.cart, dots)
+                cart2 = apply_pulses(n.cart, t.a12).set_chr_latches(t.latches)
                 r = t.ppu.take_nmi()
-                clock_all = |st, k|
-                    if k == 0 {
-                        st
-                    } else {
-                        c = st.cart.clock_scanline()
-                        clock_all({ cart: c.cart, irq: st.irq or c.irq }, k - 1)
-                    }
-                clocked = clock_all({ cart: n.cart, irq: Bool.False }, t.sl_clocks)
-                { bus: Nrom({ ..n, ppu: r.ppu, cart: clocked.cart }), nmi: r.value, irq: clocked.irq }
+                { bus: Nrom(put_ppu({ ..n, cart: cart2 }, r.ppu)), nmi: r.value, irq: Cartridge.irq_line(cart2) }
             }
         }
 
@@ -211,8 +333,8 @@ Bus := [
         match bus {
             Flat(_) => { bus: bus, irq: Bool.False }
             Nrom(n) => {
-                r = n.apu.tick(n.cart, cycles)
-                { bus: Nrom({ ..n, apu: r.apu, dma_stall: n.dma_stall.plus(r.stall) }), irq: r.irq }
+                r = Box.unbox(n.apu).tick(n.cart, cycles)
+                { bus: Nrom({ ..n, apu: Box.box(r.apu), dma_stall: n.dma_stall.plus(r.stall) }), irq: r.irq }
             }
         }
 
@@ -221,8 +343,8 @@ Bus := [
         match bus {
             Flat(_) => { bus: bus, samples: [] }
             Nrom(n) => {
-                r = n.apu.take_samples()
-                { bus: Nrom({ ..n, apu: r.apu }), samples: r.samples }
+                r = Box.unbox(n.apu).take_samples()
+                { bus: Nrom({ ..n, apu: Box.box(r.apu) }), samples: r.samples }
             }
         }
 
@@ -233,8 +355,8 @@ Bus := [
         match bus {
             Flat(_) => { bus: bus, value: Bool.False }
             Nrom(n) => {
-                r = n.ppu.take_nmi()
-                { bus: Nrom({ ..n, ppu: r.ppu }), value: r.value }
+                r = Box.unbox(n.ppu).take_nmi()
+                { bus: Nrom(put_ppu(n, r.ppu)), value: r.value }
             }
         }
 
@@ -255,14 +377,14 @@ Bus := [
     ppu_frame = |bus|
         match bus {
             Flat(_) => 0
-            Nrom(n) => n.ppu.frame
+            Nrom(n) => n.frame_count
         }
 
     ppu_framebuffer : Bus -> List(U8)
     ppu_framebuffer = |bus|
         match bus {
             Flat(_) => []
-            Nrom(n) => n.ppu.framebuffer
+            Nrom(n) => Box.unbox(n.ppu).framebuffer
         }
 }
 

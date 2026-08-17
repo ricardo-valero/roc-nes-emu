@@ -14,6 +14,14 @@ Cpu := {
     bus : Bus,
     cycles : U64,
     jammed : Bool,
+    # intra-instruction access timing: the Nth bus access of an instruction
+    # occupies CPU cycle N (exact for the simple ops timing ROMs probe
+    # with; RMW dummy cycles deviate by one). base_cycles snapshots the
+    # cycle count at instruction start; each access observes the PPU at
+    # (base_cycles + N) * 3 - 2 - mid-dot of its cycle, the phase
+    # calibrated against blargg's vbl_set_time/nmi_timing.
+    base_cycles : U64,
+    subcycle : U64,
 }.{
     init : {} -> Cpu
     init = |_| {
@@ -21,6 +29,8 @@ Cpu := {
         bus: Bus.flat(List.repeat(0, 0x10000)),
         cycles: 0,
         jammed: Bool.False,
+        base_cycles: 0,
+        subcycle: 0,
     }
 
     # Build a core from explicit state (verification harnesses)
@@ -30,6 +40,8 @@ Cpu := {
         bus: bus,
         cycles: 0,
         jammed: Bool.False,
+        base_cycles: 0,
+        subcycle: 0,
     }
 
     # --- status flag helpers (C=0x01 Z=0x02 I=0x04 D=0x08 B=0x10 U=0x20 V=0x40 N=0x80) ---
@@ -61,14 +73,24 @@ Cpu := {
 
     read8_at : Cpu, U16 -> { cpu : Cpu, value : U8 }
     read8_at = |cpu, addr| {
-        r = cpu.bus.read8(addr)
-        { cpu: { ..cpu, bus: r.bus }, value: r.value }
+        n = cpu.subcycle.plus(1)
+        r = cpu.bus.read8d(addr, cpu.base_cycles.plus(n) * 3 - 2)
+        { cpu: { ..cpu, bus: r.bus, subcycle: n }, value: r.value }
+    }
+
+    write8_at : Cpu, U16, U8 -> Cpu
+    write8_at = |cpu, addr, v| {
+        n = cpu.subcycle.plus(1)
+        # writes land at the end of their cycle (one dot later than reads
+        # observe) - blargg 07-nmi_on_timing pins the phase
+        { ..cpu, bus: cpu.bus.write8d(addr, v, cpu.base_cycles.plus(n) * 3 - 1), subcycle: n }
     }
 
     read16_at : Cpu, U16 -> { cpu : Cpu, value : U16 }
     read16_at = |cpu, addr| {
-        r = cpu.bus.read16(addr)
-        { cpu: { ..cpu, bus: r.bus }, value: r.value }
+        lo = read8_at(cpu, addr)
+        hi = read8_at(lo.cpu, addr.plus(1))
+        { cpu: hi.cpu, value: hi.value.to_u16().shl_wrap(8).bitwise_or(lo.value.to_u16()) }
     }
 
     fetch8 : Cpu -> { cpu : Cpu, value : U8 }
@@ -102,10 +124,8 @@ Cpu := {
     push8 : Cpu, U8 -> Cpu
     push8 = |cpu, v| {
         addr = cpu.reg.stack_pointer.to_u16().bitwise_or(0x0100)
-        { ..cpu,
-            bus: cpu.bus.write8(addr, v),
-            reg: cpu.reg.write8(StackPointer, cpu.reg.stack_pointer.minus_wrap(1)),
-        }
+        pushed = write8_at(cpu, addr, v)
+        { ..pushed, reg: pushed.reg.write8(StackPointer, pushed.reg.stack_pointer.minus_wrap(1)) }
     }
 
     pull8 : Cpu -> { cpu : Cpu, value : U8 }
@@ -204,7 +224,7 @@ Cpu := {
     store_val : Cpu, Operand, U8 -> Cpu
     store_val = |cpu, opd, v|
         match opd {
-            At(a) => { ..cpu, bus: cpu.bus.write8(a, v) }
+            At(a) => write8_at(cpu, a, v)
             Acc => { ..cpu, reg: cpu.reg.write8(Accumulator, v) }
             _ => cpu
         }
@@ -278,7 +298,7 @@ Cpu := {
                     } else {
                         addr
                     }
-                { ..cpu, bus: cpu.bus.write8(target, v) }
+                write8_at(cpu, target, v)
             }
 
             _ => cpu
@@ -303,16 +323,18 @@ Cpu := {
     }
 
     nmi : Cpu -> Cpu
-    nmi = |cpu0| {
+    nmi = |cpu00| {
+        cpu0 = { ..cpu00, base_cycles: cpu00.cycles, subcycle: 0 }
         cpu = interrupt(cpu0, 0xFFFA, cpu0.reg.status.bitwise_and(0xEF).bitwise_or(0x20))
         { ..cpu, cycles: cpu.cycles.plus_wrap(7) }
     }
 
     irq : Cpu -> Cpu
-    irq = |cpu0|
-        if cpu0.reg.status.bitwise_and(0x04) != 0 {
-            cpu0
+    irq = |cpu00|
+        if cpu00.reg.status.bitwise_and(0x04) != 0 {
+            cpu00
         } else {
+            cpu0 = { ..cpu00, base_cycles: cpu00.cycles, subcycle: 0 }
             cpu = interrupt(cpu0, 0xFFFE, cpu0.reg.status.bitwise_and(0xEF).bitwise_or(0x20))
             { ..cpu, cycles: cpu.cycles.plus_wrap(7) }
         }
@@ -324,7 +346,8 @@ Cpu := {
         if cpu0.jammed {
             cpu0
         } else {
-            f = read8_at(cpu0, cpu0.reg.program_counter)
+            started = { ..cpu0, base_cycles: cpu0.cycles, subcycle: 0 }
+            f = read8_at(started, started.reg.program_counter)
             inst = Instruction.lookup(f.value)
             cpu1 = { ..f.cpu, reg: f.cpu.reg.write16(ProgramCounter, f.cpu.reg.program_counter.plus_wrap(1)) }
             r = resolve(cpu1, inst.mode)

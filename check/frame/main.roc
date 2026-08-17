@@ -11,7 +11,7 @@ import nes.Cartridge
 
 # Headless frame capture, run from the repo root:
 #
-#   roc check/frame/main.roc -- <rom> <frames> [out.ppm]
+#   roc check/frame/main.roc -- <rom> <frames> [out.ppm] [<button>@<frame>[+] ...]
 #
 # Runs the ROM for N frames, prints the framebuffer digest (djb2 over the
 # 61,440 palette indices) and the APU sample digest (djb2 over each frame's
@@ -65,20 +65,55 @@ parse_dec = |b, i, acc|
         Err(_) => acc
     }
 
-# run N frames, draining the APU each frame and folding the samples
-# (quantized to 16 bits) into a running djb2
-run_frames : { nes : Nes, sdigest : U64 }, U64 -> { nes : Nes, sdigest : U64 }
-run_frames = |st, count|
-    if count == 0 {
+# an input event: hold `button` for frames [from, from+len) — probe.roc's
+# tap/hold schedule syntax, so a scene found with the probe freezes with
+# the identical command line (input-dependent scenes like Punch-Out!!'s
+# fight need the same taps on every run for the digest to reproduce)
+Event : { button : Str, from : U64, len : U64 }
+
+# "<name>@<frame>[+]" -> event; tap = 5 frames, `+` holds forever
+parse_event : Str -> [Button(Event), Bad(Str)]
+parse_event = |s| {
+    bytes = s.to_utf8()
+    at = bytes.fold({ i: 0, found: 0xFFFF }, |st, c| {
+        next = if c == 64 and st.found == 0xFFFF { { i: st.i, found: st.i } } else { st }
+        { i: next.i.plus(1), found: next.found }
+    })
+    if at.found == 0xFFFF {
+        Bad(s)
+    } else {
+        name = Str.from_utf8(bytes.sublist({ start: 0, len: at.found })) ?? ""
+        rest = bytes.sublist({ start: at.found.plus(1), len: bytes.len().minus(at.found).minus(1) })
+        hold = (rest.last() ?? 0) == 43 # trailing '+'
+        frame = parse_dec(rest, 0, 0)
+        len = if hold { 100000000 } else { 5 }
+        Button({ button: name, from: frame, len: len })
+    }
+}
+
+buttons_at : List(Event), U64 -> { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool }
+buttons_at = |events, frame| {
+    on = |name|
+        events.fold(Bool.False, |acc, e|
+            acc or (e.button == name and frame >= e.from and frame < e.from.plus(e.len)))
+    { a: on("a"), b: on("b"), select: on("select"), start: on("start"), up: on("up"), down: on("down"), left: on("left"), right: on("right") }
+}
+
+# run frames [i, until), driving the controller from the schedule and
+# draining the APU each frame, folding the samples (quantized to 16 bits)
+# into a running djb2
+run_frames : { nes : Nes, sdigest : U64 }, List(Event), U64, U64 -> { nes : Nes, sdigest : U64 }
+run_frames = |st, events, i, until|
+    if i >= until {
         st
     } else {
-        stepped = Nes.run_frame(st.nes, Nes.no_buttons({}))
+        stepped = Nes.run_frame(st.nes, buttons_at(events, i))
         drained = stepped.take_samples()
         h = drained.samples.fold(st.sdigest, |acc, s| {
             q = (s * 32767.0).to_u64_wrap()
             acc.shl_wrap(5).plus_wrap(acc).plus_wrap(q)
         })
-        run_frames({ nes: drained.nes, sdigest: h }, count - 1)
+        run_frames({ nes: drained.nes, sdigest: h }, events, i.plus(1), until)
     }
 
 # find "<key> <digest>\n" in the digests file; key = "<rom> <frames>"
@@ -116,24 +151,33 @@ main! = |args| {
             frames = parse_dec(Path.from_os_str(frames_arg).display().to_utf8(), 0, 0)
             rom_bytes = rom_path.read_bytes!()?
             cart = Cartridge.from_bytes(rom_bytes) ? |_| NotANesFile
+            # trailing args: `<button>@<frame>[+]` input events; the first
+            # non-event arg is the optional PPM dump path
+            extra = List.sublist(args, { start: 3, len: args.len() })
+            sorted = extra.fold({ events: [], out: "" }, |st, arg| {
+                s = Path.from_os_str(arg).display()
+                match parse_event(s) {
+                    Button(e) => { ..st, events: st.events.append(e) }
+                    Bad(_) => if st.out == "" { { ..st, out: s } } else { st }
+                }
+            })
             start = { nes: Nes.from_cartridge(cart), sdigest: 5381 }
-            result = run_frames(start, frames)
+            z : U64
+            z = 0
+            result = run_frames(start, sorted.events, z, frames)
             done = result.nes
             fb = done.framebuffer()
             digest = digest_of(fb)
             Stdout.line!("${rom_str} after ${frames.to_str()} frames: digest ${digest.to_str()}")?
             Stdout.line!("samples digest ${result.sdigest.to_str()}")?
-            # optional PPM dump (4th arg)
             written =
-                match args {
-                    [_, _, _, out_arg, ..] => {
-                        out = Path.from_os_str(out_arg)
-                        out.write_bytes!(to_ppm(fb))?
-                        Stdout.line!("wrote ${out.display()}")?
-                        Ok({})
-                    }
-
-                    _ => Ok({})
+                if sorted.out == "" {
+                    Ok({})
+                } else {
+                    out = Path.from_os_str(OsStr.from_str(sorted.out))
+                    out.write_bytes!(to_ppm(fb))?
+                    Stdout.line!("wrote ${sorted.out}")?
+                    Ok({})
                 }
             written?
             # frozen digest comparison
@@ -162,6 +206,6 @@ main! = |args| {
             }
         }
 
-        _ => Err(Usage("usage: <rom> <frames> [out.ppm]"))
+        _ => Err(Usage("usage: <rom> <frames> [out.ppm] [<button>@<frame>[+] ...]"))
     }
 }

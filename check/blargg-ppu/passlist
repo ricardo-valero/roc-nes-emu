@@ -1,15 +1,27 @@
 # ROMs that gate (regressions here fail the check).
 check/blargg-ppu/data/01-vbl_basics.nes
+check/blargg-ppu/data/02-vbl_set_time.nes
+check/blargg-ppu/data/03-vbl_clear_time.nes
 check/blargg-ppu/data/04-nmi_control.nes
+check/blargg-ppu/data/05-nmi_timing.nes
+check/blargg-ppu/data/06-suppression.nes
+check/blargg-ppu/data/07-nmi_on_timing.nes
+check/blargg-ppu/data/08-nmi_off_timing.nes
+check/blargg-ppu/data/09-even_odd_frames.nes
+check/blargg-ppu/data/10-even_odd_timing.nes
 check/blargg-ppu/data/oam_read.nes
-# Excluded, with reasons (see design: scanline granularity is deliberate):
-#   02-vbl_set_time, 03-vbl_clear_time, 05-nmi_timing, 06-suppression,
-#   07-nmi_on_timing, 08-nmi_off_timing - probe the vblank flag / NMI edge
-#     at +-1 PPU-clock offsets; requires dot-level timing.
-#   09-even_odd_frames, 10-even_odd_timing - odd-frame dot skip not modeled.
-#   oam_stress - dot-level OAM access patterns during rendering.
-#   ppu_open_bus - PPU open-bus decay not modeled.
-#   mmc3-1..6 (mmc3_test_2) - all clock the IRQ counter via explicit A12
-#     toggles ($2006 writes, rendering disabled); our MMC3 clocks per rendered
-#     scanline (the approximation games like SMB3 use). Register-driven A12
-#     clocking requires dot-level modeling - revisit if a game needs it.
+check/blargg-ppu/data/mmc3-1-clocking.nes
+check/blargg-ppu/data/mmc3-2-details.nes
+check/blargg-ppu/data/mmc3-3-A12_clocking.nes
+check/blargg-ppu/data/mmc3-4-scanline_timing.nes
+check/blargg-ppu/data/mmc3-5-MMC3.nes
+# Excluded, with reasons (see ROADMAP.md for the phase plan):
+#   mmc3-6-MMC3_alt - tests the ALTERNATE (clone/MMC3A) IRQ revision whose
+#     reload semantics are mutually exclusive with mmc3-5's; no single
+#     configuration passes both. Permanent, by design.
+#   oam_stress - its basic $2003/$2004 behaviors gate via oam_read; the
+#     failing sub-checks are accesses DURING rendering, which need the
+#     per-dot sprite-evaluation timeline (secondary-OAM clear/eval/fetch
+#     phases). Accuracy long tail, not required for raster games -
+#     confirmed by running it against the span renderer 2026-08-15.
+#   ppu_open_bus - PPU open-bus decay not modeled (accuracy long tail).

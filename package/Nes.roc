@@ -20,31 +20,25 @@ Nes := {
     step = |nes| {
         before = nes.cpu.cycles
         c1 = nes.cpu.step()
-        stall = c1.bus.take_stall({})
-        c2 = { ..c1, bus: stall.bus, cycles: c1.cycles.plus_wrap(stall.value) }
-        # an NMI latched by a register write lands on the instruction's last
-        # cycle - too late for this instruction's interrupt sample, so it is
-        # delivered after the NEXT instruction
-        w = c2.bus.take_nmi({})
-        c3 = { ..c2, bus: w.bus }
-        elapsed = c3.cycles - before
-        dots = elapsed.plus(elapsed).plus(elapsed) # 3 PPU dots per CPU cycle
-        t = c3.bus.tick_ppu(dots)
-        ta = t.bus.tick_apu(elapsed)
-        c4 = { ..c3, bus: ta.bus }
+        # one fused bus pass: stall accounting, write-latched NMI pickup,
+        # lazy PPU catch-up, mapper/APU ticking, interrupt levels
+        r = c1.bus.after_step(c1.cycles - before, c1.cycles)
+        c2 = { ..c1, bus: r.bus, cycles: c1.cycles.plus_wrap(r.stall) }
         # vblank-entry NMIs (mid-instruction in dot time) deliver now;
-        # write-latched ones from the previous instruction deliver now too.
+        # write-latched ones (a $2000 write enabling NMI during vblank land
+        # on the instruction's last cycle - too late for this instruction's
+        # interrupt sample) deliver after the NEXT instruction.
         # IRQ lines (mapper, APU frame counter, DMC) are level-triggered:
         # Cpu.irq honors the I flag, and each source's handler access
         # (mapper $E000 write, $4015 read) deasserts its line.
         after_nmi =
-            if nes.delayed_nmi or t.nmi {
-                c4.nmi()
+            if nes.delayed_nmi or r.entry_nmi {
+                c2.nmi()
             } else {
-                c4
+                c2
             }
-        final = if t.irq or ta.irq { after_nmi.irq() } else { after_nmi }
-        { cpu: final, delayed_nmi: w.value }
+        final = if r.irq { after_nmi.irq() } else { after_nmi }
+        { cpu: final, delayed_nmi: r.latched_nmi }
     }
 
     no_buttons : {} -> { a : Bool, b : Bool, select : Bool, start : Bool, up : Bool, down : Bool, left : Bool, right : Bool }

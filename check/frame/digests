@@ -1,3 +1,29 @@
 check/nestest/data/nestest.nes 60 14080113076627785441
-samples check/nestest/data/nestest.nes 60 5627527487467067023
-samples check/blargg-apu/data/1-len_ctr.nes 60 13256500446806467902
+samples check/nestest/data/nestest.nes 60 2259207036467884417
+samples check/blargg-apu/data/1-len_ctr.nes 60 17386291904149307281
+# perf-gate baselines (emulation-perf change): 300-frame runs double as
+# timing runs and regression checks
+check/nestest/data/nestest.nes 300 14080113076627785441
+samples check/nestest/data/nestest.nes 300 5656018931224547079
+check/blargg-ppu/data/mmc3-5-MMC3.nes 300 4245884850128989181
+samples check/blargg-ppu/data/mmc3-5-MMC3.nes 300 269228928193125584
+# sample digests re-frozen 2026-08-15 (dot-accurate-ppu): the framebuffer
+# digests were bit-identical across the change; the sample streams shifted
+# because game code observes vblank at dot-exact positions now, moving APU
+# writes by a few cycles. The cycle-exact blargg APU suite gates the APU
+# itself.
+# mmc3-5 digests re-frozen 2026-08-15 (mmc3-a12): IRQs moved from line-end
+# to true A12 rise dots, and the ROM's displayed verdict changed - to
+# "Passed" (result code 0 is the confirmation; it now gates in the
+# blargg-ppu passlist).
+# Punch-Out!! scenes (mmc2 change): fetch-driven CHR latch gate. All three
+# runs use the input schedule `start@180 start@500 start@900` (title ->
+# circuit menu -> VS screen -> fight); rerun with those exact events.
+# 300 = title, 1200 = Glass Joe ring entry, 1800 = mid-fight round 1 with
+# the HUD/ring CHR split on screen.
+../rom/Punch-Out!! (USA).nes 300 3737506429368907489
+samples ../rom/Punch-Out!! (USA).nes 300 14865815566278799558
+../rom/Punch-Out!! (USA).nes 1200 14493844532303288420
+samples ../rom/Punch-Out!! (USA).nes 1200 7063298288633949991
+../rom/Punch-Out!! (USA).nes 1800 17792006761077691954
+samples ../rom/Punch-Out!! (USA).nes 1800 11732524499011569870
