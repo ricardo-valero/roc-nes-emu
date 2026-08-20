@@ -2,18 +2,28 @@
 #
 # Where the older `Instruction.roc` carries a flat `Op` enum in a four-column
 # record, this states each instruction's capability in the type: the payload
-# admits only the addressing modes that instruction actually has, families with
-# a single mode carry none at all, and the fused unofficial opcodes name the two
-# operations they are built from. Cycle counts and the page-cross penalty are
-# derived from access class and mode rather than transcribed per opcode.
+# admits only the addressing modes that family has, families with a single mode
+# carry none at all, and the fused unofficial opcodes name the two operations
+# they are built from. Cycle counts and the page-cross penalty are derived from
+# access class and mode rather than transcribed per opcode.
 #
 # References: https://www.nesdev.org/wiki/CPU_unofficial_opcodes
 #             https://www.oxyron.de/html/opcodes02.html
 import /Cpu/Instruction
 
 # The full addressing-mode set, and the per-family subsets that narrow it.
-# A family's subset is exactly the modes that instruction has on hardware, so
-# `Load(X(ZeroPageX))` - an addressing mode LDX does not have - will not compile.
+#
+# Subsets are per *family*, not per register: `Load` admits every mode any load
+# reaches, so `Load(X(ZeroPageX))` compiles even though LDX has no zero page,X
+# form. Per-register precision would need a subset per register - 18 in total -
+# and Roc closed tag unions do not widen (roc-lang/roc#10413 makes it a compiler
+# invariant; declaring an open union is rejected outright, roc-lang/roc#9939), so
+# each subset costs an explicit `widen_*` cast below. Six subsets cost 58 lines;
+# eighteen cost 140, to catch mistakes the 256-row equivalence check at the
+# bottom of this file already catches on every build.
+#
+# What stays unrepresentable: a branch with an absolute mode, a store with an
+# immediate, a shift with an indirect - every mode/family mismatch.
 Mode : [
     Implied,
     Accumulator,
@@ -32,41 +42,17 @@ Mode : [
 
 Access : [Read, Write, ReadModifyWrite, NoOperand]
 
-AluMode : [Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX, AbsoluteY, IndexedIndirect, IndirectIndexed]
+ReadMode : [Immediate, ZeroPage, ZeroPageX, ZeroPageY, Absolute, AbsoluteX, AbsoluteY, IndexedIndirect, IndirectIndexed]
 
-IndexedMode : [ZeroPage, ZeroPageX, Absolute, AbsoluteX, AbsoluteY, IndexedIndirect, IndirectIndexed]
+WriteMode : [ZeroPage, ZeroPageX, ZeroPageY, Absolute, AbsoluteX, AbsoluteY, IndexedIndirect, IndirectIndexed]
+
+NopMode : [Implied, Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
 
 ShiftMode : [Accumulator, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
 
 IncDecMode : [ZeroPage, ZeroPageX, Absolute, AbsoluteX]
 
-NopMode : [Implied, Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
-
-CmpIndexMode : [Immediate, ZeroPage, Absolute]
-
-LdxMode : [Immediate, ZeroPage, ZeroPageY, Absolute, AbsoluteY]
-
-LdyMode : [Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
-
-LaxMode : [ZeroPage, ZeroPageY, Absolute, AbsoluteY, IndexedIndirect, IndirectIndexed]
-
-StxMode : [ZeroPage, ZeroPageY, Absolute]
-
-StyMode : [ZeroPage, ZeroPageX, Absolute]
-
-SaxMode : [ZeroPage, ZeroPageY, Absolute, IndexedIndirect]
-
-BitMode : [ZeroPage, Absolute]
-
 JumpMode : [Absolute, Indirect]
-
-ImmediateMode : [Immediate]
-
-AbsoluteYMode : [AbsoluteY]
-
-AbsoluteXMode : [AbsoluteX]
-
-AhxMode : [AbsoluteY, IndirectIndexed]
 
 Instr := [
     # Other
@@ -77,32 +63,32 @@ Instr := [
     Inc([Memory(IncDecMode), X, Y]), # Inc, Inx, Iny
     Dec([Memory(IncDecMode), X, Y]), # Dec, Dex, Dey
     # Arithmetic / logical
-    Adc(AluMode), # Adc
-    Sbc(AluMode), # Sbc (0xEB is an unofficial alias)
-    And(AluMode), # And
-    Ora(AluMode), # Ora
-    Eor(AluMode), # Eor
+    Adc(ReadMode), # Adc
+    Sbc(ReadMode), # Sbc (0xEB is an unofficial alias)
+    And(ReadMode), # And
+    Ora(ReadMode), # Ora
+    Eor(ReadMode), # Eor
     Cmp([
-        A(AluMode), # Cmp
-        X(CmpIndexMode), # Cpx
-        Y(CmpIndexMode), # Cpy
+        A(ReadMode), # Cmp
+        X(ReadMode), # Cpx
+        Y(ReadMode), # Cpy
     ]),
-    Bit(BitMode), # Bit
+    Bit(ReadMode), # Bit
     # Shift / rotate
     Shift([LeftArithmetic, RightLogical], ShiftMode), # Asl, Lsr
     Rotate([Left, Right], ShiftMode), # Rol, Ror
     # Load / store
     Load([
-        A(AluMode), # Lda
-        X(LdxMode), # Ldx
-        Y(LdyMode), # Ldy
-        AandX(LaxMode), # Lax (unofficial)
+        A(ReadMode), # Lda
+        X(ReadMode), # Ldx
+        Y(ReadMode), # Ldy
+        AandX(ReadMode), # Lax (unofficial)
     ]),
     Store([
-        A(IndexedMode), # Sta
-        X(StxMode), # Stx
-        Y(StyMode), # Sty
-        AandX(SaxMode), # Sax (unofficial)
+        A(WriteMode), # Sta
+        X(WriteMode), # Stx
+        Y(WriteMode), # Sty
+        AandX(WriteMode), # Sax (unofficial)
     ]),
     # Transfer / stack
     Transfer([AtoX, AtoY, StoX, XtoA, XtoS, YtoA]), # Tax, Tay, Tsx, Txa, Txs, Tya
@@ -122,24 +108,25 @@ Instr := [
     Fused(
         [Shift([LeftArithmetic, RightLogical]), Rotate([Left, Right]), Inc, Dec],
         [Or, And, Xor, Adc, Sbc, Cmp],
-        IndexedMode,
+        WriteMode,
     ),
     # Slo = Fused(Shift(LeftArithmetic), Or,  m)   Rla = Fused(Rotate(Left),  And, m)
     # Sre = Fused(Shift(RightLogical),   Xor, m)   Rra = Fused(Rotate(Right), Adc, m)
     # Dcp = Fused(Dec,                   Cmp, m)   Isc = Fused(Inc,           Sbc, m)
     # Unstable / one-off unofficial opcodes: the mnemonic is kept because these
     # do not decompose into a verb phrase; the behaviour is in the comment.
-    Alr(ImmediateMode), # Alr (unofficial) - A & imm, then LSR
-    Anc(ImmediateMode), # Anc (unofficial) - A & imm, N copied to C
-    Arr(ImmediateMode), # Arr (unofficial) - A & imm, then ROR, bespoke V/C
-    Axs(ImmediateMode), # Axs (unofficial) - (A & X) - imm -> X
-    Las(AbsoluteYMode), # Las (unofficial) - mem & S -> A, X, S
-    Lxa(ImmediateMode), # Lxa (unofficial) - (A | 0xEE) & imm -> A, X
-    Tas(AbsoluteYMode), # Tas (unofficial) - A & X -> S; S & (high+1) -> mem
-    Xaa(ImmediateMode), # Xaa (unofficial) - (A | 0xEE) & X & imm -> A
-    Ahx(AhxMode), # Ahx (unofficial) - A & X & (high+1) -> mem
-    Shx(AbsoluteYMode), # Shx (unofficial) - X & (high+1) -> mem
-    Shy(AbsoluteXMode), # Shy (unofficial) - Y & (high+1) -> mem
+    # Each is single-mode on hardware; the family subset is wider than that.
+    Alr(ReadMode), # Alr (unofficial) - Immediate - A & imm, then LSR
+    Anc(ReadMode), # Anc (unofficial) - Immediate - A & imm, N copied to C
+    Arr(ReadMode), # Arr (unofficial) - Immediate - A & imm, then ROR, bespoke V/C
+    Axs(ReadMode), # Axs (unofficial) - Immediate - (A & X) - imm -> X
+    Las(ReadMode), # Las (unofficial) - AbsoluteY - mem & S -> A, X, S
+    Lxa(ReadMode), # Lxa (unofficial) - Immediate - (A | 0xEE) & imm -> A, X
+    Tas(WriteMode), # Tas (unofficial) - AbsoluteY - A & X -> S; S & (high+1) -> mem
+    Xaa(ReadMode), # Xaa (unofficial) - Immediate - (A | 0xEE) & X & imm -> A
+    Ahx(WriteMode), # Ahx (unofficial) - AbsoluteY/(zp),Y - A & X & (high+1) -> mem
+    Shx(WriteMode), # Shx (unofficial) - AbsoluteY - X & (high+1) -> mem
+    Shy(WriteMode), # Shy (unofficial) - AbsoluteX - Y & (high+1) -> mem
 ].{
     lookup : U8 -> Instr
     lookup = |byte|
@@ -418,25 +405,25 @@ Instr := [
             Inc(_) => Implied
             Dec(Memory(m)) => widen_incdec(m)
             Dec(_) => Implied
-            Adc(m) => widen_alu(m)
-            Sbc(m) => widen_alu(m)
-            And(m) => widen_alu(m)
-            Ora(m) => widen_alu(m)
-            Eor(m) => widen_alu(m)
-            Cmp(A(m)) => widen_alu(m)
-            Cmp(X(m)) => widen_cmp_index(m)
-            Cmp(Y(m)) => widen_cmp_index(m)
-            Bit(m) => widen_bit(m)
+            Adc(m) => widen_read(m)
+            Sbc(m) => widen_read(m)
+            And(m) => widen_read(m)
+            Ora(m) => widen_read(m)
+            Eor(m) => widen_read(m)
+            Cmp(A(m)) => widen_read(m)
+            Cmp(X(m)) => widen_read(m)
+            Cmp(Y(m)) => widen_read(m)
+            Bit(m) => widen_read(m)
             Shift(_, m) => widen_shift(m)
             Rotate(_, m) => widen_shift(m)
-            Load(A(m)) => widen_alu(m)
-            Load(X(m)) => widen_ldx(m)
-            Load(Y(m)) => widen_ldy(m)
-            Load(AandX(m)) => widen_lax(m)
-            Store(A(m)) => widen_indexed(m)
-            Store(X(m)) => widen_stx(m)
-            Store(Y(m)) => widen_sty(m)
-            Store(AandX(m)) => widen_sax(m)
+            Load(A(m)) => widen_read(m)
+            Load(X(m)) => widen_read(m)
+            Load(Y(m)) => widen_read(m)
+            Load(AandX(m)) => widen_read(m)
+            Store(A(m)) => widen_write(m)
+            Store(X(m)) => widen_write(m)
+            Store(Y(m)) => widen_write(m)
+            Store(AandX(m)) => widen_write(m)
             Transfer(_) => Implied
             Push(_) => Implied
             Pull(_) => Implied
@@ -445,18 +432,18 @@ Instr := [
             Jump(m) => widen_jump(m)
             JumpSubroutine => Absolute
             ReturnFrom(_) => Implied
-            Fused(_, _, m) => widen_indexed(m)
-            Alr(m) => widen_imm(m)
-            Anc(m) => widen_imm(m)
-            Arr(m) => widen_imm(m)
-            Axs(m) => widen_imm(m)
-            Las(m) => widen_abs_y(m)
-            Lxa(m) => widen_imm(m)
-            Tas(m) => widen_abs_y(m)
-            Xaa(m) => widen_imm(m)
-            Ahx(m) => widen_ahx(m)
-            Shx(m) => widen_abs_y(m)
-            Shy(m) => widen_abs_x(m)
+            Fused(_, _, m) => widen_write(m)
+            Alr(m) => widen_read(m)
+            Anc(m) => widen_read(m)
+            Arr(m) => widen_read(m)
+            Axs(m) => widen_read(m)
+            Las(m) => widen_read(m)
+            Lxa(m) => widen_read(m)
+            Tas(m) => widen_write(m)
+            Xaa(m) => widen_read(m)
+            Ahx(m) => widen_write(m)
+            Shx(m) => widen_write(m)
+            Shy(m) => widen_write(m)
         }
 
     # How the instruction touches memory. The page-cross penalty and the base
@@ -576,15 +563,17 @@ Instr := [
         }
 
     # --- widening ------------------------------------------------------------
-    # Mechanical: Roc closed tag unions do not widen, so each narrowed payload
-    # needs an explicit map back into `Mode`. This is the cost of making the
-    # illegal mode/instruction pairs unrepresentable in the first place.
-    widen_alu : AluMode -> Mode
-    widen_alu = |m|
+    # Roc closed tag unions do not widen, so each narrowed payload needs an
+    # explicit cast back into `Mode`. One per family subset; see the note at the
+    # top of this file for why there are six of these and not eighteen.
+
+    widen_read : ReadMode -> Mode
+    widen_read = |m|
         match m {
             Immediate => Immediate
             ZeroPage => ZeroPage
             ZeroPageX => ZeroPageX
+            ZeroPageY => ZeroPageY
             Absolute => Absolute
             AbsoluteX => AbsoluteX
             AbsoluteY => AbsoluteY
@@ -592,16 +581,28 @@ Instr := [
             IndirectIndexed => IndirectIndexed
         }
 
-    widen_indexed : IndexedMode -> Mode
-    widen_indexed = |m|
+    widen_write : WriteMode -> Mode
+    widen_write = |m|
         match m {
             ZeroPage => ZeroPage
             ZeroPageX => ZeroPageX
+            ZeroPageY => ZeroPageY
             Absolute => Absolute
             AbsoluteX => AbsoluteX
             AbsoluteY => AbsoluteY
             IndexedIndirect => IndexedIndirect
             IndirectIndexed => IndirectIndexed
+        }
+
+    widen_nop : NopMode -> Mode
+    widen_nop = |m|
+        match m {
+            Implied => Implied
+            Immediate => Immediate
+            ZeroPage => ZeroPage
+            ZeroPageX => ZeroPageX
+            Absolute => Absolute
+            AbsoluteX => AbsoluteX
         }
 
     widen_shift : ShiftMode -> Mode
@@ -623,120 +624,12 @@ Instr := [
             AbsoluteX => AbsoluteX
         }
 
-    widen_nop : NopMode -> Mode
-    widen_nop = |m|
-        match m {
-            Implied => Implied
-            Immediate => Immediate
-            ZeroPage => ZeroPage
-            ZeroPageX => ZeroPageX
-            Absolute => Absolute
-            AbsoluteX => AbsoluteX
-        }
-
-    widen_cmp_index : CmpIndexMode -> Mode
-    widen_cmp_index = |m|
-        match m {
-            Immediate => Immediate
-            ZeroPage => ZeroPage
-            Absolute => Absolute
-        }
-
-    widen_ldx : LdxMode -> Mode
-    widen_ldx = |m|
-        match m {
-            Immediate => Immediate
-            ZeroPage => ZeroPage
-            ZeroPageY => ZeroPageY
-            Absolute => Absolute
-            AbsoluteY => AbsoluteY
-        }
-
-    widen_ldy : LdyMode -> Mode
-    widen_ldy = |m|
-        match m {
-            Immediate => Immediate
-            ZeroPage => ZeroPage
-            ZeroPageX => ZeroPageX
-            Absolute => Absolute
-            AbsoluteX => AbsoluteX
-        }
-
-    widen_lax : LaxMode -> Mode
-    widen_lax = |m|
-        match m {
-            ZeroPage => ZeroPage
-            ZeroPageY => ZeroPageY
-            Absolute => Absolute
-            AbsoluteY => AbsoluteY
-            IndexedIndirect => IndexedIndirect
-            IndirectIndexed => IndirectIndexed
-        }
-
-    widen_stx : StxMode -> Mode
-    widen_stx = |m|
-        match m {
-            ZeroPage => ZeroPage
-            ZeroPageY => ZeroPageY
-            Absolute => Absolute
-        }
-
-    widen_sty : StyMode -> Mode
-    widen_sty = |m|
-        match m {
-            ZeroPage => ZeroPage
-            ZeroPageX => ZeroPageX
-            Absolute => Absolute
-        }
-
-    widen_sax : SaxMode -> Mode
-    widen_sax = |m|
-        match m {
-            ZeroPage => ZeroPage
-            ZeroPageY => ZeroPageY
-            Absolute => Absolute
-            IndexedIndirect => IndexedIndirect
-        }
-
-    widen_bit : BitMode -> Mode
-    widen_bit = |m|
-        match m {
-            ZeroPage => ZeroPage
-            Absolute => Absolute
-        }
-
     widen_jump : JumpMode -> Mode
     widen_jump = |m|
         match m {
             Absolute => Absolute
             Indirect => Indirect
         }
-
-    widen_imm : ImmediateMode -> Mode
-    widen_imm = |m|
-        match m {
-            Immediate => Immediate
-        }
-
-    widen_abs_y : AbsoluteYMode -> Mode
-    widen_abs_y = |m|
-        match m {
-            AbsoluteY => AbsoluteY
-        }
-
-    widen_abs_x : AbsoluteXMode -> Mode
-    widen_abs_x = |m|
-        match m {
-            AbsoluteX => AbsoluteX
-        }
-
-    widen_ahx : AhxMode -> Mode
-    widen_ahx = |m|
-        match m {
-            AbsoluteY => AbsoluteY
-            IndirectIndexed => IndirectIndexed
-        }
-
 }
 
 # --- equivalence with the transcribed reference table -------------------------
