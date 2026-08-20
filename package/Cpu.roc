@@ -430,9 +430,21 @@ Cpu := {
 				set8_zn(r.cpu, member, r.value)
 			}
 
-			Store(A, _) => store_val(cpu, opd, cpu.reg.accumulator)
-			Store(X, _) => store_val(cpu, opd, cpu.reg.x)
-			Store(Y, _) => store_val(cpu, opd, cpu.reg.y)
+			# All four stores differ only in the value written, so unlike Load the
+			# unofficial case folds in and the match stays exhaustive - no dead
+			# catch-all, and a new destination would fail to compile here.
+			Store(src, _) => {
+				v =
+					match src {
+						A => cpu.reg.accumulator
+						X => cpu.reg.x
+						Y => cpu.reg.y
+						# Sax (unofficial)
+						AandX => cpu.reg.accumulator.bitwise_and(cpu.reg.x)
+					}
+				store_val(cpu, opd, v)
+			}
+
 			Transfer(AtoX) => set8_zn(cpu, X, cpu.reg.accumulator)
 			Transfer(AtoY) => set8_zn(cpu, Y, cpu.reg.accumulator)
 			Transfer(StoX) => set8_zn(cpu, X, cpu.reg.stack_pointer)
@@ -591,7 +603,6 @@ Cpu := {
 				r.cpu
 			}
 			# unofficial
-			Store(AandX, _) => store_val(cpu, opd, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
 			Fused(Dec, Cmp, _) => {
 				r = load_val(cpu, opd)
 				v = r.value.minus_wrap(1)

@@ -371,6 +371,7 @@ Instruction := [
 			0xFD => Alu(Sbc, AbsoluteX) #                               SBC
 			0xFE => Inc(Memory(AbsoluteX)) #                            INC
 			0xFF => Fused(Inc, Sbc, AbsoluteX) #                        ISC (unofficial)
+			# unreachable: all 256 byte values are listed above
 			_ => Halt
 		}
 
