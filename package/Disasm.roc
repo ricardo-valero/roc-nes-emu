@@ -1,8 +1,8 @@
-import /Cpu/Instr
+import /Cpu/Instruction
 import /Cartridge
 
 # Pure 6502 disassembler over the emulator's own decode table and mapper.
-# Every opcode (official + unofficial) renders through `Instr.lookup`,
+# Every opcode (official + unofficial) renders through `Instruction.lookup`,
 # so the listing can never disagree with the CPU about meaning or size, and
 # bytes are fetched through `Cartridge.read_prg`, so banking is the mapper's
 # problem — the same PRG mapping the CPU sees. First building block of a
@@ -27,7 +27,7 @@ Disasm :: [].{
 		}
 
 	# Conventional 6502 spelling, reconstructed from the structured tag.
-	# Runs the opposite direction to `Instr.lookup`: the tag says what the
+	# Runs the opposite direction to `Instruction.lookup`: the tag says what the
 	# instruction does, this says what assemblers call it.
 	mnemonic = |instr|
 		match instr {
@@ -141,13 +141,13 @@ Disasm :: [].{
 	# one rendered instruction at pc: `ADDR: MNEMONIC operand` + its size
 	line : Cartridge, U16 -> { text : Str, size : U16 }
 	line = |cart, pc| {
-		inst = Instr.lookup(cart.read_prg(pc))
+		inst = Instruction.lookup(cart.read_prg(pc))
 		b1 = cart.read_prg(pc.plus_wrap(1))
 		lo = cart.read_prg(pc.plus_wrap(1)).to_u16()
 		hi = cart.read_prg(pc.plus_wrap(2)).to_u16()
 		abs = hi.shl_wrap(8).bitwise_or(lo)
 		operand =
-			match Instr.mode(inst) {
+			match Instruction.mode(inst) {
 				Implied => ""
 				Accumulator => " A"
 				Immediate => " #$${hex2(b1)}"
@@ -170,7 +170,7 @@ Disasm :: [].{
 					" $${hex4(pc.plus_wrap(2).plus_wrap(disp))}"
 				}
 			}
-		{ text: "${hex4(pc)}: ${mnemonic(inst)}${operand}", size: size_of(Instr.mode(inst)) }
+		{ text: "${hex4(pc)}: ${mnemonic(inst)}${operand}", size: size_of(Instruction.mode(inst)) }
 	}
 
 	# `count` rendered lines starting at `start`, each advancing by the
@@ -250,7 +250,7 @@ expect {
 # taken from the flat table it replaced, so it is a cross-check, not a restatement.
 all_mnemonics : U8, U8, Str -> Str
 all_mnemonics = |byte, remaining, acc| {
-	m = Disasm.mnemonic(Instr.lookup(byte))
+	m = Disasm.mnemonic(Instruction.lookup(byte))
 	next = if acc == "" {
 		m
 	} else {
