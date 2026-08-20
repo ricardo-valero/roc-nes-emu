@@ -1,6 +1,6 @@
 import /Bus
 import /Cpu/Register
-import /Cpu/Instruction
+import /Cpu/Instr
 
 # Resolved operand of one instruction
 Operand : [None, Acc, Imm(U8), At(U16), Rel(U16)]
@@ -348,145 +348,171 @@ Cpu := {
         } else {
             started = { ..cpu0, base_cycles: cpu0.cycles, subcycle: 0 }
             f = read8_at(started, started.reg.program_counter)
-            inst = Instruction.lookup(f.value)
+            inst = Instr.lookup(f.value)
             cpu1 = { ..f.cpu, reg: f.cpu.reg.write16(ProgramCounter, f.cpu.reg.program_counter.plus_wrap(1)) }
-            r = resolve(cpu1, inst.mode)
+            r = resolve(cpu1, Instr.mode(inst))
             pen : U64
-            pen = if inst.penalty and r.crossed { 1 } else { 0 }
-            cpu2 = { ..r.cpu, cycles: r.cpu.cycles.plus_wrap(inst.cycles.to_u64()).plus_wrap(pen) }
-            execute(cpu2, inst.op, r.opd, r.crossed)
+            pen = if Instr.penalty(inst) and r.crossed { 1 } else { 0 }
+            cpu2 = { ..r.cpu, cycles: r.cpu.cycles.plus_wrap(Instr.base_cycles(inst).to_u64()).plus_wrap(pen) }
+            execute(cpu2, inst, r.opd, r.crossed)
         }
 
-    execute = |cpu, op, opd, crossed|
-        match op {
+    # Branch and Status name overlapping but distinct flag sets, and closed tag
+    # unions do not widen, so each needs its own mask.
+    branch_mask : [Carry, Zero, Negative, Overflow] -> U8
+    branch_mask = |flag|
+        match flag {
+            Carry => 0x01
+            Zero => 0x02
+            Overflow => 0x40
+            Negative => 0x80
+        }
+
+    # Clear reaches Overflow (CLV) but Set does not (there is no SEV), so these
+    # are two different closed unions and cannot share one mask function.
+    clear_mask : [Carry, Decimal, InterruptDisable, Overflow] -> U8
+    clear_mask = |flag|
+        match flag {
+            Carry => 0x01
+            InterruptDisable => 0x04
+            Decimal => 0x08
+            Overflow => 0x40
+        }
+
+    set_mask : [Carry, Decimal, InterruptDisable] -> U8
+    set_mask = |flag|
+        match flag {
+            Carry => 0x01
+            InterruptDisable => 0x04
+            Decimal => 0x08
+        }
+
+    execute : Cpu, Instr, Operand, Bool -> Cpu
+    execute = |cpu, instr, opd, crossed|
+        match instr {
             # loads / stores / transfers
-            Lda => {
+            Load(A, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, Accumulator, r.value)
             }
 
-            Ldx => {
+            Load(X, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, X, r.value)
             }
 
-            Ldy => {
+            Load(Y, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, Y, r.value)
             }
 
-            Sta => store_val(cpu, opd, cpu.reg.accumulator)
-            Stx => store_val(cpu, opd, cpu.reg.x)
-            Sty => store_val(cpu, opd, cpu.reg.y)
-            Tax => set8_zn(cpu, X, cpu.reg.accumulator)
-            Tay => set8_zn(cpu, Y, cpu.reg.accumulator)
-            Tsx => set8_zn(cpu, X, cpu.reg.stack_pointer)
-            Txa => set8_zn(cpu, Accumulator, cpu.reg.x)
-            Tya => set8_zn(cpu, Accumulator, cpu.reg.y)
-            Txs => { ..cpu, reg: cpu.reg.write8(StackPointer, cpu.reg.x) }
+            Store(A, _) => store_val(cpu, opd, cpu.reg.accumulator)
+            Store(X, _) => store_val(cpu, opd, cpu.reg.x)
+            Store(Y, _) => store_val(cpu, opd, cpu.reg.y)
+            Transfer(AtoX) => set8_zn(cpu, X, cpu.reg.accumulator)
+            Transfer(AtoY) => set8_zn(cpu, Y, cpu.reg.accumulator)
+            Transfer(StoX) => set8_zn(cpu, X, cpu.reg.stack_pointer)
+            Transfer(XtoA) => set8_zn(cpu, Accumulator, cpu.reg.x)
+            Transfer(YtoA) => set8_zn(cpu, Accumulator, cpu.reg.y)
+            Transfer(XtoS) => { ..cpu, reg: cpu.reg.write8(StackPointer, cpu.reg.x) }
             # arithmetic / logic
-            Adc => {
+            Alu(Adc, _) => {
                 r = load_val(cpu, opd)
                 adc_val(r.cpu, r.value)
             }
 
-            Sbc => {
+            Alu(Sbc, _) => {
                 r = load_val(cpu, opd)
                 adc_val(r.cpu, r.value.bitwise_xor(0xFF))
             }
 
-            And => {
+            Alu(And, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_and(r.value))
             }
 
-            Ora => {
+            Alu(Ora, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_or(r.value))
             }
 
-            Eor => {
+            Alu(Eor, _) => {
                 r = load_val(cpu, opd)
                 set8_zn(r.cpu, Accumulator, r.cpu.reg.accumulator.bitwise_xor(r.value))
             }
 
-            Cmp => {
+            Alu(Cmp(A), _) => {
                 r = load_val(cpu, opd)
                 compare_val(r.cpu, r.cpu.reg.accumulator, r.value)
             }
 
-            Cpx => {
+            Alu(Cmp(X), _) => {
                 r = load_val(cpu, opd)
                 compare_val(r.cpu, r.cpu.reg.x, r.value)
             }
 
-            Cpy => {
+            Alu(Cmp(Y), _) => {
                 r = load_val(cpu, opd)
                 compare_val(r.cpu, r.cpu.reg.y, r.value)
             }
 
-            Bit => {
+            Alu(Bit, _) => {
                 r = load_val(cpu, opd)
                 z = r.cpu.reg.accumulator.bitwise_and(r.value) == 0
                 p = set_flag(set_flag(set_flag(r.cpu.reg.status, 0x02, z), 0x40, r.value.bitwise_and(0x40) != 0), 0x80, r.value.bitwise_and(0x80) != 0)
                 with_p(r.cpu, p)
             }
             # shifts / rotates / inc / dec
-            Asl => {
+            Shift(LeftArithmetic, _) => {
                 r = load_val(cpu, opd)
                 rmw_shift(r.cpu, opd, shift_left(r.value, 0))
             }
 
-            Lsr => {
+            Shift(RightLogical, _) => {
                 r = load_val(cpu, opd)
                 rmw_shift(r.cpu, opd, shift_right(r.value, 0))
             }
 
-            Rol => {
+            Rotate(Left, _) => {
                 r = load_val(cpu, opd)
                 rmw_shift(r.cpu, opd, shift_left(r.value, r.cpu.reg.status.bitwise_and(0x01)))
             }
 
-            Ror => {
+            Rotate(Right, _) => {
                 r = load_val(cpu, opd)
                 rmw_shift(r.cpu, opd, shift_right(r.value, r.cpu.reg.status.bitwise_and(0x01)))
             }
 
-            Inc => {
+            Inc(Memory(_)) => {
                 r = load_val(cpu, opd)
                 v = r.value.plus_wrap(1)
                 c1 = store_val(r.cpu, opd, v)
                 with_p(c1, set_zn(c1.reg.status, v))
             }
 
-            Dec => {
+            Dec(Memory(_)) => {
                 r = load_val(cpu, opd)
                 v = r.value.minus_wrap(1)
                 c1 = store_val(r.cpu, opd, v)
                 with_p(c1, set_zn(c1.reg.status, v))
             }
 
-            Inx => set8_zn(cpu, X, cpu.reg.x.plus_wrap(1))
-            Iny => set8_zn(cpu, Y, cpu.reg.y.plus_wrap(1))
-            Dex => set8_zn(cpu, X, cpu.reg.x.minus_wrap(1))
-            Dey => set8_zn(cpu, Y, cpu.reg.y.minus_wrap(1))
-            # branches
-            Bcc => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x01) == 0, crossed)
-            Bcs => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x01) != 0, crossed)
-            Bne => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x02) == 0, crossed)
-            Beq => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x02) != 0, crossed)
-            Bvc => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x40) == 0, crossed)
-            Bvs => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x40) != 0, crossed)
-            Bpl => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x80) == 0, crossed)
-            Bmi => branch_if(cpu, opd, cpu.reg.status.bitwise_and(0x80) != 0, crossed)
+            Inc(X) => set8_zn(cpu, X, cpu.reg.x.plus_wrap(1))
+            Inc(Y) => set8_zn(cpu, Y, cpu.reg.y.plus_wrap(1))
+            Dec(X) => set8_zn(cpu, X, cpu.reg.x.minus_wrap(1))
+            Dec(Y) => set8_zn(cpu, Y, cpu.reg.y.minus_wrap(1))
+            # branches - one arm; the flag and the polarity are the whole difference
+            Branch(flag, want) =>
+                branch_if(cpu, opd, (cpu.reg.status.bitwise_and(branch_mask(flag)) != 0) == want, crossed)
+
             # jumps / subroutines / interrupts
-            Jmp =>
+            Jump(_) =>
                 match opd {
                     At(a) => { ..cpu, reg: cpu.reg.write16(ProgramCounter, a) }
                     _ => cpu
                 }
 
-            Jsr =>
+            JumpSubroutine =>
                 match opd {
                     At(target) => {
                         ret = cpu.reg.program_counter.minus_wrap(1)
@@ -498,20 +524,20 @@ Cpu := {
                     _ => cpu
                 }
 
-            Rts => {
+            ReturnFrom(Subroutine) => {
                 lo = pull8(cpu)
                 hi = pull8(lo.cpu)
                 pc = hi.value.to_u16().shl_wrap(8).bitwise_or(lo.value.to_u16()).plus_wrap(1)
                 { ..hi.cpu, reg: hi.cpu.reg.write16(ProgramCounter, pc) }
             }
 
-            Brk => {
+            Break => {
                 # push the address after the padding byte
                 c0 = { ..cpu, reg: cpu.reg.write16(ProgramCounter, cpu.reg.program_counter.plus_wrap(1)) }
                 interrupt(c0, 0xFFFE, c0.reg.status.bitwise_or(0x30))
             }
 
-            Rti => {
+            ReturnFrom(Interrupt) => {
                 p = pull8(cpu)
                 lo = pull8(p.cpu)
                 hi = pull8(lo.cpu)
@@ -520,52 +546,49 @@ Cpu := {
                 { ..c1, reg: c1.reg.write16(ProgramCounter, pc) }
             }
             # stack ops
-            Pha => push8(cpu, cpu.reg.accumulator)
-            Php => push8(cpu, cpu.reg.status.bitwise_or(0x30))
-            Pla => {
+            Push(A) => push8(cpu, cpu.reg.accumulator)
+            Push(Status) => push8(cpu, cpu.reg.status.bitwise_or(0x30))
+            Pull(A) => {
                 r = pull8(cpu)
                 set8_zn(r.cpu, Accumulator, r.value)
             }
 
-            Plp => {
+            Pull(Status) => {
                 r = pull8(cpu)
                 with_p(r.cpu, r.value.bitwise_and(0xEF).bitwise_or(0x20))
             }
-            # flag ops
-            Clc => with_p(cpu, set_flag(cpu.reg.status, 0x01, Bool.False))
-            Sec => with_p(cpu, set_flag(cpu.reg.status, 0x01, Bool.True))
-            Cli => with_p(cpu, set_flag(cpu.reg.status, 0x04, Bool.False))
-            Sei => with_p(cpu, set_flag(cpu.reg.status, 0x04, Bool.True))
-            Cld => with_p(cpu, set_flag(cpu.reg.status, 0x08, Bool.False))
-            Sed => with_p(cpu, set_flag(cpu.reg.status, 0x08, Bool.True))
-            Clv => with_p(cpu, set_flag(cpu.reg.status, 0x40, Bool.False))
-            Nop => {
-                r = load_val(cpu, opd) # unofficial NOPs perform their operand read
+            # flag ops - one arm each way
+            Status(Clear(flag)) => with_p(cpu, set_flag(cpu.reg.status, clear_mask(flag), Bool.False))
+            Status(Set(flag)) => with_p(cpu, set_flag(cpu.reg.status, set_mask(flag), Bool.True))
+            Nop => cpu
+
+            Skip(_) => {
+                r = load_val(cpu, opd) # the operand NOPs perform their read
                 r.cpu
             }
             # unofficial
-            Lax => {
+            Load(AandX, _) => {
                 r = load_val(cpu, opd)
                 c1 = set8_zn(r.cpu, Accumulator, r.value)
                 { ..c1, reg: c1.reg.write8(X, r.value) }
             }
 
-            Sax => store_val(cpu, opd, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
-            Dcp => {
+            Store(AandX, _) => store_val(cpu, opd, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
+            Fused(Dec, Cmp, _) => {
                 r = load_val(cpu, opd)
                 v = r.value.minus_wrap(1)
                 c1 = store_val(r.cpu, opd, v)
                 compare_val(c1, c1.reg.accumulator, v)
             }
 
-            Isc => {
+            Fused(Inc, Sbc, _) => {
                 r = load_val(cpu, opd)
                 v = r.value.plus_wrap(1)
                 c1 = store_val(r.cpu, opd, v)
                 adc_val(c1, v.bitwise_xor(0xFF))
             }
 
-            Slo => {
+            Fused(Shift(LeftArithmetic), Or, _) => {
                 r = load_val(cpu, opd)
                 s = shift_left(r.value, 0)
                 c1 = store_val(r.cpu, opd, s.value)
@@ -573,7 +596,7 @@ Cpu := {
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_or(s.value))
             }
 
-            Rla => {
+            Fused(Rotate(Left), And, _) => {
                 r = load_val(cpu, opd)
                 s = shift_left(r.value, r.cpu.reg.status.bitwise_and(0x01))
                 c1 = store_val(r.cpu, opd, s.value)
@@ -581,7 +604,7 @@ Cpu := {
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_and(s.value))
             }
 
-            Sre => {
+            Fused(Shift(RightLogical), Xor, _) => {
                 r = load_val(cpu, opd)
                 s = shift_right(r.value, 0)
                 c1 = store_val(r.cpu, opd, s.value)
@@ -589,7 +612,7 @@ Cpu := {
                 set8_zn(c2, Accumulator, c2.reg.accumulator.bitwise_xor(s.value))
             }
 
-            Rra => {
+            Fused(Rotate(Right), Adc, _) => {
                 r = load_val(cpu, opd)
                 s = shift_right(r.value, r.cpu.reg.status.bitwise_and(0x01))
                 c1 = store_val(r.cpu, opd, s.value)
@@ -597,14 +620,18 @@ Cpu := {
                 adc_val(c2, s.value)
             }
 
-            Anc => {
+            # The type admits any rmw/alu pairing; lookup emits only the six
+            # above, so this is unreachable.
+            Fused(_, _, _) => cpu
+
+            Anc(_) => {
                 r = load_val(cpu, opd)
                 v = r.cpu.reg.accumulator.bitwise_and(r.value)
                 c1 = set8_zn(r.cpu, Accumulator, v)
                 with_p(c1, set_flag(c1.reg.status, 0x01, v.bitwise_and(0x80) != 0))
             }
 
-            Alr => {
+            Alr(_) => {
                 r = load_val(cpu, opd)
                 v = r.cpu.reg.accumulator.bitwise_and(r.value)
                 s = shift_right(v, 0)
@@ -612,7 +639,7 @@ Cpu := {
                 set8_zn(c1, Accumulator, s.value)
             }
 
-            Arr => {
+            Arr(_) => {
                 r0 = load_val(cpu, opd)
                 v = r0.cpu.reg.accumulator.bitwise_and(r0.value)
                 r = v.shr_zf_wrap(1).bitwise_or(r0.cpu.reg.status.bitwise_and(0x01).shl_wrap(7))
@@ -622,7 +649,7 @@ Cpu := {
                 { ..r0.cpu, reg: r0.cpu.reg.write8(Accumulator, r).write8(Status, p2) }
             }
 
-            Axs => {
+            Axs(_) => {
                 r = load_val(cpu, opd)
                 t = r.cpu.reg.accumulator.bitwise_and(r.cpu.reg.x)
                 res = t.minus_wrap(r.value)
@@ -630,14 +657,14 @@ Cpu := {
                 { ..c1, reg: c1.reg.write8(X, res) }
             }
 
-            Xaa => {
+            Xaa(_) => {
                 # unstable: magic constant 0xEE (calibrated against SingleStepTests)
                 r = load_val(cpu, opd)
                 v = r.cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(r.cpu.reg.x).bitwise_and(r.value)
                 set8_zn(r.cpu, Accumulator, v)
             }
 
-            Lxa => {
+            Lxa(_) => {
                 # unstable: magic constant 0xEE (calibrated against SingleStepTests)
                 r = load_val(cpu, opd)
                 v = r.cpu.reg.accumulator.bitwise_or(0xEE).bitwise_and(r.value)
@@ -645,23 +672,23 @@ Cpu := {
                 { ..c1, reg: c1.reg.write8(X, v) }
             }
 
-            Ahx => sh_write(cpu, opd, crossed, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
-            Shx => sh_write(cpu, opd, crossed, cpu.reg.x)
-            Shy => sh_write(cpu, opd, crossed, cpu.reg.y)
-            Tas => {
+            Ahx(_) => sh_write(cpu, opd, crossed, cpu.reg.accumulator.bitwise_and(cpu.reg.x))
+            Shx(_) => sh_write(cpu, opd, crossed, cpu.reg.x)
+            Shy(_) => sh_write(cpu, opd, crossed, cpu.reg.y)
+            Tas(_) => {
                 sp = cpu.reg.accumulator.bitwise_and(cpu.reg.x)
                 c1 = { ..cpu, reg: cpu.reg.write8(StackPointer, sp) }
                 sh_write(c1, opd, crossed, sp)
             }
 
-            Las => {
+            Las(_) => {
                 r = load_val(cpu, opd)
                 v = r.value.bitwise_and(r.cpu.reg.stack_pointer)
                 c1 = set8_zn(r.cpu, Accumulator, v)
                 { ..c1, reg: c1.reg.write8(X, v).write8(StackPointer, v) }
             }
 
-            Kil => { ..cpu, jammed: Bool.True }
+            Halt => { ..cpu, jammed: Bool.True }
         }
 
     # --- program helpers (used by the behavioral expects) ---

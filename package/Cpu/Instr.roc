@@ -381,27 +381,17 @@ Instr := [
 	mode : Instr -> Mode
 	mode = |instr|
 		match instr {
-			Break => Implied
-			Halt => Implied
-			Nop => Implied
 			Skip(m) => widen_skip(m)
 			Inc(Memory(m)) => widen_incdec(m)
-			Inc(_) => Implied
 			Dec(Memory(m)) => widen_incdec(m)
-			Dec(_) => Implied
 			Alu(_, m) => widen_read(m)
 			Shift(_, m) => widen_shift(m)
 			Rotate(_, m) => widen_shift(m)
 			Load(_, m) => widen_read(m)
 			Store(_, m) => widen_write(m)
-			Transfer(_) => Implied
-			Push(_) => Implied
-			Pull(_) => Implied
 			Branch(_, _) => Relative
-			Status(_) => Implied
 			Jump(m) => widen_jump(m)
 			JumpSubroutine => Absolute
-			ReturnFrom(_) => Implied
 			Fused(_, _, m) => widen_write(m)
 			Alr(m) => widen_read(m)
 			Anc(m) => widen_read(m)
@@ -414,6 +404,7 @@ Instr := [
 			Ahx(m) => widen_write(m)
 			Shx(m) => widen_write(m)
 			Shy(m) => widen_write(m)
+			_ => Implied
 		}
 
 	# How the instruction touches memory. The page-cross penalty and the base
