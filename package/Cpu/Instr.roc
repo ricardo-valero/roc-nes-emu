@@ -64,23 +64,13 @@ Instr := [
     Inc([Memory(IncDecMode), X, Y]), # Inc, Inx, Iny
     Dec([Memory(IncDecMode), X, Y]), # Dec, Dex, Dey
     # Arithmetic / logical
-    Alu([Adc, Sbc, And, Ora, Eor, Cmp([A, X, Y]), Bit], ReadMode), 
+    Alu([Adc, Sbc, And, Ora, Eor, Cmp([A, X, Y]), Bit], ReadMode), # Adc, Sbc, And, Ora, Eor, Cmp, Cpx, Cpy, Bit (0xEB an unofficial Sbc alias)
     # Shift / rotate
     Shift([LeftArithmetic, RightLogical], ShiftMode), # Asl, Lsr
     Rotate([Left, Right], ShiftMode), # Rol, Ror
     # Load / store
-    Load([
-        A, # Lda
-        X, # Ldx
-        Y, # Ldy
-        AandX, # Lax (unofficial)
-       ], ReadMode),
-    Store([
-        A, # Sta
-        X, # Stx
-        Y, # Sty
-        AandX, # Sax (unofficial)
-    ], WriteMode),
+    Load([A, X, Y, AandX], ReadMode), # Lda, Ldx, Ldy, Lax (unofficial)
+    Store([A, X, Y, AandX], WriteMode), # Sta, Stx, Sty, Sax (unofficial)
     # Transfer / stack
     Transfer([AtoX, AtoY, StoX, XtoA, XtoS, YtoA]), # Tax, Tay, Tsx, Txa, Txs, Tya
     Push([A, Status]), # Pha, Php
