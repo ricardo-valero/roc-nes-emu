@@ -46,7 +46,7 @@ ReadMode : [Immediate, ZeroPage, ZeroPageX, ZeroPageY, Absolute, AbsoluteX, Abso
 
 WriteMode : [ZeroPage, ZeroPageX, ZeroPageY, Absolute, AbsoluteX, AbsoluteY, IndexedIndirect, IndirectIndexed]
 
-NopMode : [Implied, Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
+SkipMode : [Immediate, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
 
 ShiftMode : [Accumulator, ZeroPage, ZeroPageX, Absolute, AbsoluteX]
 
@@ -58,38 +58,29 @@ Instr := [
     # Other
     Break, # Brk
     Halt, # Kil (unofficial)
-    Nop(NopMode), # Nop (unofficial except 0xEA)
+    Nop, # Nop (implied) - 0xEA official, the six implied twins unofficial
+    Skip(SkipMode), # Dop/Top a.k.a. Skb/Skw (unofficial) - reads an operand and discards it
     # Increment / decrement
     Inc([Memory(IncDecMode), X, Y]), # Inc, Inx, Iny
     Dec([Memory(IncDecMode), X, Y]), # Dec, Dex, Dey
     # Arithmetic / logical
-    Adc(ReadMode), # Adc
-    Sbc(ReadMode), # Sbc (0xEB is an unofficial alias)
-    And(ReadMode), # And
-    Ora(ReadMode), # Ora
-    Eor(ReadMode), # Eor
-    Cmp([
-        A(ReadMode), # Cmp
-        X(ReadMode), # Cpx
-        Y(ReadMode), # Cpy
-    ]),
-    Bit(ReadMode), # Bit
+    Alu([Adc, Sbc, And, Ora, Eor, Cmp([A, X, Y]), Bit], ReadMode), 
     # Shift / rotate
     Shift([LeftArithmetic, RightLogical], ShiftMode), # Asl, Lsr
     Rotate([Left, Right], ShiftMode), # Rol, Ror
     # Load / store
     Load([
-        A(ReadMode), # Lda
-        X(ReadMode), # Ldx
-        Y(ReadMode), # Ldy
-        AandX(ReadMode), # Lax (unofficial)
-    ]),
+        A, # Lda
+        X, # Ldx
+        Y, # Ldy
+        AandX, # Lax (unofficial)
+       ], ReadMode),
     Store([
-        A(WriteMode), # Sta
-        X(WriteMode), # Stx
-        Y(WriteMode), # Sty
-        AandX(WriteMode), # Sax (unofficial)
-    ]),
+        A, # Sta
+        X, # Stx
+        Y, # Sty
+        AandX, # Sax (unofficial)
+    ], WriteMode),
     # Transfer / stack
     Transfer([AtoX, AtoY, StoX, XtoA, XtoS, YtoA]), # Tax, Tay, Tsx, Txa, Txs, Tya
     Push([A, Status]), # Pha, Php
@@ -122,8 +113,8 @@ Instr := [
     Axs(ReadMode), # Axs (unofficial) - Immediate - (A & X) - imm -> X
     Las(ReadMode), # Las (unofficial) - AbsoluteY - mem & S -> A, X, S
     Lxa(ReadMode), # Lxa (unofficial) - Immediate - (A | 0xEE) & imm -> A, X
-    Tas(WriteMode), # Tas (unofficial) - AbsoluteY - A & X -> S; S & (high+1) -> mem
     Xaa(ReadMode), # Xaa (unofficial) - Immediate - (A | 0xEE) & X & imm -> A
+    Tas(WriteMode), # Tas (unofficial) - AbsoluteY - A & X -> S; S & (high+1) -> mem
     Ahx(WriteMode), # Ahx (unofficial) - AbsoluteY/(zp),Y - A & X & (high+1) -> mem
     Shx(WriteMode), # Shx (unofficial) - AbsoluteY - X & (high+1) -> mem
     Shy(WriteMode), # Shy (unofficial) - AbsoluteX - Y & (high+1) -> mem
@@ -132,259 +123,259 @@ Instr := [
     lookup = |byte|
         match byte {
             0x00 => Break                                               # BRK
-            0x01 => Ora(IndexedIndirect)                                # ORA
+            0x01 => Alu(Ora,IndexedIndirect)                               # ORA
             0x02 => Halt                                                # KIL (unofficial)
             0x03 => Fused(Shift(LeftArithmetic), Or, IndexedIndirect)   # SLO (unofficial)
-            0x04 => Nop(ZeroPage)                                       # NOP (unofficial)
-            0x05 => Ora(ZeroPage)                                       # ORA
+            0x04 => Skip(ZeroPage)                                      # NOP (unofficial)
+            0x05 => Alu(Ora, ZeroPage)                                       # ORA
             0x06 => Shift(LeftArithmetic, ZeroPage)                     # ASL
             0x07 => Fused(Shift(LeftArithmetic), Or, ZeroPage)          # SLO (unofficial)
             0x08 => Push(Status)                                        # PHP
-            0x09 => Ora(Immediate)                                      # ORA
+            0x09 => Alu(Ora, Immediate)                                      # ORA
             0x0A => Shift(LeftArithmetic, Accumulator)                  # ASL
             0x0B => Anc(Immediate)                                      # ANC (unofficial)
-            0x0C => Nop(Absolute)                                       # NOP (unofficial)
-            0x0D => Ora(Absolute)                                       # ORA
+            0x0C => Skip(Absolute)                                      # NOP (unofficial)
+            0x0D => Alu(Ora, Absolute)                                       # ORA
             0x0E => Shift(LeftArithmetic, Absolute)                     # ASL
             0x0F => Fused(Shift(LeftArithmetic), Or, Absolute)          # SLO (unofficial)
             0x10 => Branch(Negative, Bool.False)                        # BPL
-            0x11 => Ora(IndirectIndexed)                                # ORA
+            0x11 => Alu(Ora, IndirectIndexed)                                # ORA
             0x12 => Halt                                                # KIL (unofficial)
             0x13 => Fused(Shift(LeftArithmetic), Or, IndirectIndexed)   # SLO (unofficial)
-            0x14 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0x15 => Ora(ZeroPageX)                                      # ORA
+            0x14 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0x15 => Alu(Ora, ZeroPageX)                                      # ORA
             0x16 => Shift(LeftArithmetic, ZeroPageX)                    # ASL
             0x17 => Fused(Shift(LeftArithmetic), Or, ZeroPageX)         # SLO (unofficial)
             0x18 => Status(Clear(Carry))                                # CLC
-            0x19 => Ora(AbsoluteY)                                      # ORA
-            0x1A => Nop(Implied)                                        # NOP (unofficial)
+            0x19 => Alu(Ora, AbsoluteY)                                      # ORA
+            0x1A => Nop                                                 # NOP (unofficial)
             0x1B => Fused(Shift(LeftArithmetic), Or, AbsoluteY)         # SLO (unofficial)
-            0x1C => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0x1D => Ora(AbsoluteX)                                      # ORA
+            0x1C => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0x1D => Alu(Ora, AbsoluteX)                                      # ORA
             0x1E => Shift(LeftArithmetic, AbsoluteX)                    # ASL
             0x1F => Fused(Shift(LeftArithmetic), Or, AbsoluteX)         # SLO (unofficial)
             0x20 => JumpSubroutine                                      # JSR
-            0x21 => And(IndexedIndirect)                                # AND
+            0x21 => Alu(And, IndexedIndirect)                                # AND
             0x22 => Halt                                                # KIL (unofficial)
             0x23 => Fused(Rotate(Left), And, IndexedIndirect)           # RLA (unofficial)
-            0x24 => Bit(ZeroPage)                                       # BIT
-            0x25 => And(ZeroPage)                                       # AND
+            0x24 => Alu(Bit, ZeroPage)                                       # BIT
+            0x25 => Alu(And, ZeroPage)                                       # AND
             0x26 => Rotate(Left, ZeroPage)                              # ROL
             0x27 => Fused(Rotate(Left), And, ZeroPage)                  # RLA (unofficial)
             0x28 => Pull(Status)                                        # PLP
-            0x29 => And(Immediate)                                      # AND
+            0x29 => Alu(And,Immediate)                                      # AND
             0x2A => Rotate(Left, Accumulator)                           # ROL
             0x2B => Anc(Immediate)                                      # ANC (unofficial)
-            0x2C => Bit(Absolute)                                       # BIT
-            0x2D => And(Absolute)                                       # AND
+            0x2C => Alu(Bit, Absolute)                                       # BIT
+            0x2D => Alu(And, Absolute)                                       # AND
             0x2E => Rotate(Left, Absolute)                              # ROL
             0x2F => Fused(Rotate(Left), And, Absolute)                  # RLA (unofficial)
             0x30 => Branch(Negative, Bool.True)                         # BMI
-            0x31 => And(IndirectIndexed)                                # AND
+            0x31 => Alu(And,IndirectIndexed)                                # AND
             0x32 => Halt                                                # KIL (unofficial)
             0x33 => Fused(Rotate(Left), And, IndirectIndexed)           # RLA (unofficial)
-            0x34 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0x35 => And(ZeroPageX)                                      # AND
+            0x34 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0x35 => Alu(And, ZeroPageX)                                      # AND
             0x36 => Rotate(Left, ZeroPageX)                             # ROL
             0x37 => Fused(Rotate(Left), And, ZeroPageX)                 # RLA (unofficial)
             0x38 => Status(Set(Carry))                                  # SEC
-            0x39 => And(AbsoluteY)                                      # AND
-            0x3A => Nop(Implied)                                        # NOP (unofficial)
+            0x39 => Alu(And, AbsoluteY)                                      # AND
+            0x3A => Nop                                                 # NOP (unofficial)
             0x3B => Fused(Rotate(Left), And, AbsoluteY)                 # RLA (unofficial)
-            0x3C => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0x3D => And(AbsoluteX)                                      # AND
+            0x3C => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0x3D => Alu(And, AbsoluteX)                                      # AND
             0x3E => Rotate(Left, AbsoluteX)                             # ROL
             0x3F => Fused(Rotate(Left), And, AbsoluteX)                 # RLA (unofficial)
             0x40 => ReturnFrom(Interrupt)                               # RTI
-            0x41 => Eor(IndexedIndirect)                                # EOR
+            0x41 => Alu(Eor, IndexedIndirect)                                # EOR
             0x42 => Halt                                                # KIL (unofficial)
             0x43 => Fused(Shift(RightLogical), Xor, IndexedIndirect)    # SRE (unofficial)
-            0x44 => Nop(ZeroPage)                                       # NOP (unofficial)
-            0x45 => Eor(ZeroPage)                                       # EOR
+            0x44 => Skip(ZeroPage)                                      # NOP (unofficial)
+            0x45 => Alu(Eor, ZeroPage)                                       # EOR
             0x46 => Shift(RightLogical, ZeroPage)                       # LSR
             0x47 => Fused(Shift(RightLogical), Xor, ZeroPage)           # SRE (unofficial)
             0x48 => Push(A)                                             # PHA
-            0x49 => Eor(Immediate)                                      # EOR
+            0x49 => Alu(Eor,Immediate)                                      # EOR
             0x4A => Shift(RightLogical, Accumulator)                    # LSR
             0x4B => Alr(Immediate)                                      # ALR (unofficial)
             0x4C => Jump(Absolute)                                      # JMP
-            0x4D => Eor(Absolute)                                       # EOR
+            0x4D => Alu(Eor, Absolute)                                       # EOR
             0x4E => Shift(RightLogical, Absolute)                       # LSR
             0x4F => Fused(Shift(RightLogical), Xor, Absolute)           # SRE (unofficial)
             0x50 => Branch(Overflow, Bool.False)                        # BVC
-            0x51 => Eor(IndirectIndexed)                                # EOR
+            0x51 => Alu(Eor, IndirectIndexed)                                # EOR
             0x52 => Halt                                                # KIL (unofficial)
             0x53 => Fused(Shift(RightLogical), Xor, IndirectIndexed)    # SRE (unofficial)
-            0x54 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0x55 => Eor(ZeroPageX)                                      # EOR
+            0x54 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0x55 => Alu(Eor, ZeroPageX)                                      # EOR
             0x56 => Shift(RightLogical, ZeroPageX)                      # LSR
             0x57 => Fused(Shift(RightLogical), Xor, ZeroPageX)          # SRE (unofficial)
             0x58 => Status(Clear(InterruptDisable))                     # CLI
-            0x59 => Eor(AbsoluteY)                                      # EOR
-            0x5A => Nop(Implied)                                        # NOP (unofficial)
+            0x59 => Alu(Eor, AbsoluteY)                                      # EOR
+            0x5A => Nop                                                 # NOP (unofficial)
             0x5B => Fused(Shift(RightLogical), Xor, AbsoluteY)          # SRE (unofficial)
-            0x5C => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0x5D => Eor(AbsoluteX)                                      # EOR
+            0x5C => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0x5D => Alu(Eor, AbsoluteX)                                      # EOR
             0x5E => Shift(RightLogical, AbsoluteX)                      # LSR
             0x5F => Fused(Shift(RightLogical), Xor, AbsoluteX)          # SRE (unofficial)
             0x60 => ReturnFrom(Subroutine)                              # RTS
-            0x61 => Adc(IndexedIndirect)                                # ADC
+            0x61 => Alu(Adc, IndexedIndirect)                                # ADC
             0x62 => Halt                                                # KIL (unofficial)
             0x63 => Fused(Rotate(Right), Adc, IndexedIndirect)          # RRA (unofficial)
-            0x64 => Nop(ZeroPage)                                       # NOP (unofficial)
-            0x65 => Adc(ZeroPage)                                       # ADC
+            0x64 => Skip(ZeroPage)                                      # NOP (unofficial)
+            0x65 => Alu(Adc, ZeroPage)                                       # ADC
             0x66 => Rotate(Right, ZeroPage)                             # ROR
             0x67 => Fused(Rotate(Right), Adc, ZeroPage)                 # RRA (unofficial)
             0x68 => Pull(A)                                             # PLA
-            0x69 => Adc(Immediate)                                      # ADC
+            0x69 => Alu(Adc, Immediate)                                      # ADC
             0x6A => Rotate(Right, Accumulator)                          # ROR
             0x6B => Arr(Immediate)                                      # ARR (unofficial)
             0x6C => Jump(Indirect)                                      # JMP
-            0x6D => Adc(Absolute)                                       # ADC
+            0x6D => Alu(Adc, Absolute)                                       # ADC
             0x6E => Rotate(Right, Absolute)                             # ROR
             0x6F => Fused(Rotate(Right), Adc, Absolute)                 # RRA (unofficial)
             0x70 => Branch(Overflow, Bool.True)                         # BVS
-            0x71 => Adc(IndirectIndexed)                                # ADC
+            0x71 => Alu(Adc, IndirectIndexed)                                # ADC
             0x72 => Halt                                                # KIL (unofficial)
             0x73 => Fused(Rotate(Right), Adc, IndirectIndexed)          # RRA (unofficial)
-            0x74 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0x75 => Adc(ZeroPageX)                                      # ADC
+            0x74 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0x75 => Alu(Adc, ZeroPageX)                                      # ADC
             0x76 => Rotate(Right, ZeroPageX)                            # ROR
             0x77 => Fused(Rotate(Right), Adc, ZeroPageX)                # RRA (unofficial)
             0x78 => Status(Set(InterruptDisable))                       # SEI
-            0x79 => Adc(AbsoluteY)                                      # ADC
-            0x7A => Nop(Implied)                                        # NOP (unofficial)
+            0x79 => Alu(Adc,    AbsoluteY)                                      # ADC
+            0x7A => Nop                                                 # NOP (unofficial)
             0x7B => Fused(Rotate(Right), Adc, AbsoluteY)                # RRA (unofficial)
-            0x7C => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0x7D => Adc(AbsoluteX)                                      # ADC
+            0x7C => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0x7D => Alu(Adc, AbsoluteX)                                      # ADC
             0x7E => Rotate(Right, AbsoluteX)                            # ROR
             0x7F => Fused(Rotate(Right), Adc, AbsoluteX)                # RRA (unofficial)
-            0x80 => Nop(Immediate)                                      # NOP (unofficial)
-            0x81 => Store(A(IndexedIndirect))                           # STA
-            0x82 => Nop(Immediate)                                      # NOP (unofficial)
-            0x83 => Store(AandX(IndexedIndirect))                       # SAX (unofficial)
-            0x84 => Store(Y(ZeroPage))                                  # STY
-            0x85 => Store(A(ZeroPage))                                  # STA
-            0x86 => Store(X(ZeroPage))                                  # STX
-            0x87 => Store(AandX(ZeroPage))                              # SAX (unofficial)
+            0x80 => Skip(Immediate)                                     # NOP (unofficial)
+            0x81 => Store(A,IndexedIndirect)                           # STA
+            0x82 => Skip(Immediate)                                     # NOP (unofficial)
+            0x83 => Store(AandX,IndexedIndirect)                       # SAX (unofficial)
+            0x84 => Store(Y,ZeroPage)                                  # STY
+            0x85 => Store(A,ZeroPage)                                  # STA
+            0x86 => Store(X,ZeroPage)                                  # STX
+            0x87 => Store(AandX,ZeroPage)                              # SAX (unofficial)
             0x88 => Dec(Y)                                              # DEY
-            0x89 => Nop(Immediate)                                      # NOP (unofficial)
+            0x89 => Skip(Immediate)                                     # NOP (unofficial)
             0x8A => Transfer(XtoA)                                      # TXA
             0x8B => Xaa(Immediate)                                      # XAA (unofficial)
-            0x8C => Store(Y(Absolute))                                  # STY
-            0x8D => Store(A(Absolute))                                  # STA
-            0x8E => Store(X(Absolute))                                  # STX
-            0x8F => Store(AandX(Absolute))                              # SAX (unofficial)
+            0x8C => Store(Y,Absolute)                                  # STY
+            0x8D => Store(A,Absolute)                                  # STA
+            0x8E => Store(X,Absolute)                                  # STX
+            0x8F => Store(AandX,Absolute)                              # SAX (unofficial)
             0x90 => Branch(Carry, Bool.False)                           # BCC
-            0x91 => Store(A(IndirectIndexed))                           # STA
+            0x91 => Store(A,IndirectIndexed)                           # STA
             0x92 => Halt                                                # KIL (unofficial)
             0x93 => Ahx(IndirectIndexed)                                # AHX (unofficial)
-            0x94 => Store(Y(ZeroPageX))                                 # STY
-            0x95 => Store(A(ZeroPageX))                                 # STA
-            0x96 => Store(X(ZeroPageY))                                 # STX
-            0x97 => Store(AandX(ZeroPageY))                             # SAX (unofficial)
+            0x94 => Store(Y,ZeroPageX)                                 # STY
+            0x95 => Store(A,ZeroPageX)                                 # STA
+            0x96 => Store(X,ZeroPageY)                                 # STX
+            0x97 => Store(AandX,ZeroPageY)                             # SAX (unofficial)
             0x98 => Transfer(YtoA)                                      # TYA
-            0x99 => Store(A(AbsoluteY))                                 # STA
+            0x99 => Store(A,AbsoluteY)                                 # STA
             0x9A => Transfer(XtoS)                                      # TXS
             0x9B => Tas(AbsoluteY)                                      # TAS (unofficial)
             0x9C => Shy(AbsoluteX)                                      # SHY (unofficial)
-            0x9D => Store(A(AbsoluteX))                                 # STA
+            0x9D => Store(A,AbsoluteX)                                 # STA
             0x9E => Shx(AbsoluteY)                                      # SHX (unofficial)
             0x9F => Ahx(AbsoluteY)                                      # AHX (unofficial)
-            0xA0 => Load(Y(Immediate))                                  # LDY
-            0xA1 => Load(A(IndexedIndirect))                            # LDA
-            0xA2 => Load(X(Immediate))                                  # LDX
-            0xA3 => Load(AandX(IndexedIndirect))                        # LAX (unofficial)
-            0xA4 => Load(Y(ZeroPage))                                   # LDY
-            0xA5 => Load(A(ZeroPage))                                   # LDA
-            0xA6 => Load(X(ZeroPage))                                   # LDX
-            0xA7 => Load(AandX(ZeroPage))                               # LAX (unofficial)
+            0xA0 => Load(Y,Immediate)                                  # LDY
+            0xA1 => Load(A,IndexedIndirect)                            # LDA
+            0xA2 => Load(X,Immediate)                                  # LDX
+            0xA3 => Load(AandX,IndexedIndirect)                        # LAX (unofficial)
+            0xA4 => Load(Y,ZeroPage)                                   # LDY
+            0xA5 => Load(A,ZeroPage)                                   # LDA
+            0xA6 => Load(X,ZeroPage)                                   # LDX
+            0xA7 => Load(AandX,ZeroPage)                               # LAX (unofficial)
             0xA8 => Transfer(AtoY)                                      # TAY
-            0xA9 => Load(A(Immediate))                                  # LDA
+            0xA9 => Load(A,Immediate)                                  # LDA
             0xAA => Transfer(AtoX)                                      # TAX
             0xAB => Lxa(Immediate)                                      # LXA (unofficial)
-            0xAC => Load(Y(Absolute))                                   # LDY
-            0xAD => Load(A(Absolute))                                   # LDA
-            0xAE => Load(X(Absolute))                                   # LDX
-            0xAF => Load(AandX(Absolute))                               # LAX (unofficial)
+            0xAC => Load(Y,Absolute)                                   # LDY
+            0xAD => Load(A,Absolute)                                   # LDA
+            0xAE => Load(X,Absolute)                                   # LDX
+            0xAF => Load(AandX,Absolute)                               # LAX (unofficial)
             0xB0 => Branch(Carry, Bool.True)                            # BCS
-            0xB1 => Load(A(IndirectIndexed))                            # LDA
+            0xB1 => Load(A,IndirectIndexed)                            # LDA
             0xB2 => Halt                                                # KIL (unofficial)
-            0xB3 => Load(AandX(IndirectIndexed))                        # LAX (unofficial)
-            0xB4 => Load(Y(ZeroPageX))                                  # LDY
-            0xB5 => Load(A(ZeroPageX))                                  # LDA
-            0xB6 => Load(X(ZeroPageY))                                  # LDX
-            0xB7 => Load(AandX(ZeroPageY))                              # LAX (unofficial)
+            0xB3 => Load(AandX,IndirectIndexed)                        # LAX (unofficial)
+            0xB4 => Load(Y,ZeroPageX)                                  # LDY
+            0xB5 => Load(A,ZeroPageX)                                  # LDA
+            0xB6 => Load(X,ZeroPageY)                                  # LDX
+            0xB7 => Load(AandX,ZeroPageY)                              # LAX (unofficial)
             0xB8 => Status(Clear(Overflow))                             # CLV
-            0xB9 => Load(A(AbsoluteY))                                  # LDA
+            0xB9 => Load(A,AbsoluteY)                                  # LDA
             0xBA => Transfer(StoX)                                      # TSX
             0xBB => Las(AbsoluteY)                                      # LAS (unofficial)
-            0xBC => Load(Y(AbsoluteX))                                  # LDY
-            0xBD => Load(A(AbsoluteX))                                  # LDA
-            0xBE => Load(X(AbsoluteY))                                  # LDX
-            0xBF => Load(AandX(AbsoluteY))                              # LAX (unofficial)
-            0xC0 => Cmp(Y(Immediate))                                   # CPY
-            0xC1 => Cmp(A(IndexedIndirect))                             # CMP
-            0xC2 => Nop(Immediate)                                      # NOP (unofficial)
+            0xBC => Load(Y,AbsoluteX)                                  # LDY
+            0xBD => Load(A,AbsoluteX)                                  # LDA
+            0xBE => Load(X,AbsoluteY)                                  # LDX
+            0xBF => Load(AandX,AbsoluteY)                              # LAX (unofficial)
+            0xC0 => Alu(Cmp(Y), (Immediate))                                   # CPY
+            0xC1 => Alu(Cmp(A), (IndexedIndirect))                             # CMP
+            0xC2 => Skip(Immediate)                                     # NOP (unofficial)
             0xC3 => Fused(Dec, Cmp, IndexedIndirect)                    # DCP (unofficial)
-            0xC4 => Cmp(Y(ZeroPage))                                    # CPY
-            0xC5 => Cmp(A(ZeroPage))                                    # CMP
+            0xC4 => Alu(Cmp(Y), (ZeroPage))                                    # CPY
+            0xC5 => Alu(Cmp(A), (ZeroPage))                                    # CMP
             0xC6 => Dec(Memory(ZeroPage))                               # DEC
             0xC7 => Fused(Dec, Cmp, ZeroPage)                           # DCP (unofficial)
             0xC8 => Inc(Y)                                              # INY
-            0xC9 => Cmp(A(Immediate))                                   # CMP
+            0xC9 => Alu(Cmp(A), (Immediate))                                   # CMP
             0xCA => Dec(X)                                              # DEX
             0xCB => Axs(Immediate)                                      # AXS (unofficial)
-            0xCC => Cmp(Y(Absolute))                                    # CPY
-            0xCD => Cmp(A(Absolute))                                    # CMP
+            0xCC => Alu(Cmp(Y), (Absolute))                                    # CPY
+            0xCD => Alu(Cmp(A), (Absolute))                                    # CMP
             0xCE => Dec(Memory(Absolute))                               # DEC
             0xCF => Fused(Dec, Cmp, Absolute)                           # DCP (unofficial)
             0xD0 => Branch(Zero, Bool.False)                            # BNE
-            0xD1 => Cmp(A(IndirectIndexed))                             # CMP
+            0xD1 => Alu(Cmp(A), (IndirectIndexed))                             # CMP
             0xD2 => Halt                                                # KIL (unofficial)
             0xD3 => Fused(Dec, Cmp, IndirectIndexed)                    # DCP (unofficial)
-            0xD4 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0xD5 => Cmp(A(ZeroPageX))                                   # CMP
+            0xD4 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0xD5 => Alu(Cmp(A), (ZeroPageX))                                   # CMP
             0xD6 => Dec(Memory(ZeroPageX))                              # DEC
             0xD7 => Fused(Dec, Cmp, ZeroPageX)                          # DCP (unofficial)
             0xD8 => Status(Clear(Decimal))                              # CLD
-            0xD9 => Cmp(A(AbsoluteY))                                   # CMP
-            0xDA => Nop(Implied)                                        # NOP (unofficial)
+            0xD9 => Alu(Cmp(A), (AbsoluteY))                                   # CMP
+            0xDA => Nop                                                 # NOP (unofficial)
             0xDB => Fused(Dec, Cmp, AbsoluteY)                          # DCP (unofficial)
-            0xDC => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0xDD => Cmp(A(AbsoluteX))                                   # CMP
+            0xDC => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0xDD => Alu(Cmp(A), (AbsoluteX))                                   # CMP
             0xDE => Dec(Memory(AbsoluteX))                              # DEC
             0xDF => Fused(Dec, Cmp, AbsoluteX)                          # DCP (unofficial)
-            0xE0 => Cmp(X(Immediate))                                   # CPX
-            0xE1 => Sbc(IndexedIndirect)                                # SBC
-            0xE2 => Nop(Immediate)                                      # NOP (unofficial)
+            0xE0 => Alu(Cmp(X), (Immediate))                                   # CPX
+            0xE1 => Alu(Sbc, IndexedIndirect)                                # SBC
+            0xE2 => Skip(Immediate)                                     # NOP (unofficial)
             0xE3 => Fused(Inc, Sbc, IndexedIndirect)                    # ISC (unofficial)
-            0xE4 => Cmp(X(ZeroPage))                                    # CPX
-            0xE5 => Sbc(ZeroPage)                                       # SBC
+            0xE4 => Alu(Cmp(X), (ZeroPage))                                    # CPX
+            0xE5 => Alu(Sbc, ZeroPage)                                       # SBC
             0xE6 => Inc(Memory(ZeroPage))                               # INC
             0xE7 => Fused(Inc, Sbc, ZeroPage)                           # ISC (unofficial)
             0xE8 => Inc(X)                                              # INX
-            0xE9 => Sbc(Immediate)                                      # SBC
-            0xEA => Nop(Implied)                                        # NOP
-            0xEB => Sbc(Immediate)                                      # SBC (unofficial)
-            0xEC => Cmp(X(Absolute))                                    # CPX
-            0xED => Sbc(Absolute)                                       # SBC
+            0xE9 => Alu(Sbc, Immediate)                                      # SBC
+            0xEA => Nop                                                 # NOP
+            0xEB => Alu(Sbc, Immediate)                                      # SBC (unofficial)
+            0xEC => Alu(Cmp(X),(Absolute))                                    # CPX
+            0xED => Alu(Sbc, Absolute)                                       # SBC
             0xEE => Inc(Memory(Absolute))                               # INC
             0xEF => Fused(Inc, Sbc, Absolute)                           # ISC (unofficial)
             0xF0 => Branch(Zero, Bool.True)                             # BEQ
-            0xF1 => Sbc(IndirectIndexed)                                # SBC
+            0xF1 => Alu(Sbc, IndirectIndexed)                                # SBC
             0xF2 => Halt                                                # KIL (unofficial)
             0xF3 => Fused(Inc, Sbc, IndirectIndexed)                    # ISC (unofficial)
-            0xF4 => Nop(ZeroPageX)                                      # NOP (unofficial)
-            0xF5 => Sbc(ZeroPageX)                                      # SBC
+            0xF4 => Skip(ZeroPageX)                                     # NOP (unofficial)
+            0xF5 => Alu(Sbc, ZeroPageX)                                      # SBC
             0xF6 => Inc(Memory(ZeroPageX))                              # INC
             0xF7 => Fused(Inc, Sbc, ZeroPageX)                          # ISC (unofficial)
             0xF8 => Status(Set(Decimal))                                # SED
-            0xF9 => Sbc(AbsoluteY)                                      # SBC
-            0xFA => Nop(Implied)                                        # NOP (unofficial)
+            0xF9 => Alu(Sbc, AbsoluteY)                                      # SBC
+            0xFA => Nop                                                 # NOP (unofficial)
             0xFB => Fused(Inc, Sbc, AbsoluteY)                          # ISC (unofficial)
-            0xFC => Nop(AbsoluteX)                                      # NOP (unofficial)
-            0xFD => Sbc(AbsoluteX)                                      # SBC
+            0xFC => Skip(AbsoluteX)                                     # NOP (unofficial)
+            0xFD => Alu(Sbc, AbsoluteX)                                      # SBC
             0xFE => Inc(Memory(AbsoluteX))                              # INC
             0xFF => Fused(Inc, Sbc, AbsoluteX)                          # ISC (unofficial)
             _ => Halt # unreachable: all 256 byte values are listed above
@@ -400,30 +391,17 @@ Instr := [
         match instr {
             Break => Implied
             Halt => Implied
-            Nop(m) => widen_nop(m)
+            Nop => Implied
+            Skip(m) => widen_skip(m)
             Inc(Memory(m)) => widen_incdec(m)
             Inc(_) => Implied
             Dec(Memory(m)) => widen_incdec(m)
             Dec(_) => Implied
-            Adc(m) => widen_read(m)
-            Sbc(m) => widen_read(m)
-            And(m) => widen_read(m)
-            Ora(m) => widen_read(m)
-            Eor(m) => widen_read(m)
-            Cmp(A(m)) => widen_read(m)
-            Cmp(X(m)) => widen_read(m)
-            Cmp(Y(m)) => widen_read(m)
-            Bit(m) => widen_read(m)
+            Alu(_, m) => widen_read(m)
             Shift(_, m) => widen_shift(m)
             Rotate(_, m) => widen_shift(m)
-            Load(A(m)) => widen_read(m)
-            Load(X(m)) => widen_read(m)
-            Load(Y(m)) => widen_read(m)
-            Load(AandX(m)) => widen_read(m)
-            Store(A(m)) => widen_write(m)
-            Store(X(m)) => widen_write(m)
-            Store(Y(m)) => widen_write(m)
-            Store(AandX(m)) => widen_write(m)
+            Load(_, m) => widen_read(m)
+            Store(_, m) => widen_write(m)
             Transfer(_) => Implied
             Push(_) => Implied
             Pull(_) => Implied
@@ -439,8 +417,8 @@ Instr := [
             Axs(m) => widen_read(m)
             Las(m) => widen_read(m)
             Lxa(m) => widen_read(m)
-            Tas(m) => widen_write(m)
             Xaa(m) => widen_read(m)
+            Tas(m) => widen_write(m)
             Ahx(m) => widen_write(m)
             Shx(m) => widen_write(m)
             Shy(m) => widen_write(m)
@@ -451,16 +429,9 @@ Instr := [
     access : Instr -> Access
     access = |instr|
         match instr {
-            Load(_) => Read
-            Adc(_) => Read
-            Sbc(_) => Read
-            And(_) => Read
-            Ora(_) => Read
-            Eor(_) => Read
-            Cmp(_) => Read
-            Bit(_) => Read
-            Nop(Implied) => NoOperand
-            Nop(_) => Read
+            Skip(_) => Read
+            Load(_, _) => Read
+            Alu(_, _) => Read
             Alr(_) => Read
             Anc(_) => Read
             Arr(_) => Read
@@ -468,7 +439,7 @@ Instr := [
             Las(_) => Read
             Lxa(_) => Read
             Xaa(_) => Read
-            Store(_) => Write
+            Store(_, _) => Write
             Ahx(_) => Write
             Shx(_) => Write
             Shy(_) => Write
@@ -594,10 +565,9 @@ Instr := [
             IndirectIndexed => IndirectIndexed
         }
 
-    widen_nop : NopMode -> Mode
-    widen_nop = |m|
+    widen_skip : SkipMode -> Mode
+    widen_skip = |m|
         match m {
-            Implied => Implied
             Immediate => Immediate
             ZeroPage => ZeroPage
             ZeroPageX => ZeroPageX
@@ -662,8 +632,8 @@ expect all_agree(0x00, 255) # all 256 opcodes match the reference table
 shaped : U8, (Instr -> Bool) -> Bool
 shaped = |byte, pred| pred(Instr.lookup(byte))
 
-expect shaped(0xA9, |i| match i { Load(A(Immediate)) => Bool.True, _ => Bool.False }) # LDA #
-expect shaped(0xA3, |i| match i { Load(AandX(IndexedIndirect)) => Bool.True, _ => Bool.False }) # LAX (d,X)
+expect shaped(0xA9, |i| match i { Load(A,Immediate) => Bool.True, _ => Bool.False }) # LDA #
+expect shaped(0xA3, |i| match i { Load(AandX,IndexedIndirect) => Bool.True, _ => Bool.False }) # LAX (d,X)
 expect shaped(0x07, |i| match i { Fused(Shift(LeftArithmetic), Or, ZeroPage) => Bool.True, _ => Bool.False }) # SLO
 expect shaped(0x47, |i| match i { Fused(Shift(RightLogical), Xor, ZeroPage) => Bool.True, _ => Bool.False }) # SRE is EOR, not AND
 expect shaped(0x67, |i| match i { Fused(Rotate(Right), Adc, ZeroPage) => Bool.True, _ => Bool.False }) # RRA is ADC, not AND
